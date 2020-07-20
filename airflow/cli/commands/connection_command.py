@@ -126,7 +126,6 @@ def connections_add(args):
             msg = msg.format(conn_id=new_conn.conn_id)
             print(msg)
 
-
 @cli_utils.action_logging
 def connections_delete(args):
     """Deletes connection from DB"""
@@ -156,6 +155,7 @@ def connections_delete(args):
 
 alternative_conn_file_specs = ['file_path']
 
+@cli_utils.action_logging
 def connections_import(args):
     """Import new connections"""
     #check for the file path in arguments
@@ -168,4 +168,25 @@ def connections_import(args):
                ' {missing!r}'.format(missing=missing_args))
         raise SystemExit(msg)
 
-    load_connections(args.file_path)
+    new_conns_map = load_connections(args.file_path)
+    for _,new_conn_list in new_conns_map.items():
+        for new_conn in new_conn_list:
+            with create_session() as session:
+                if not (session.query(Connection)
+                        .filter(Connection.conn_id == new_conn.conn_id).first()):
+                    session.add(new_conn)
+                    msg = '\n\tSuccessfully added `conn_id`={conn_id} : {uri}\n'
+                    msg = msg.format(conn_id=new_conn.conn_id,
+                                    uri=new_conn.get_uri() or
+                                    urlunparse((new_conn.conn_type,
+                                                '{login}:{password}@{host}:{port}'
+                                                    .format(login=new_conn.conn_login or '',
+                                                            password='******' if new_conn.conn_password else '',
+                                                            host=new_conn.conn_host or '',
+                                                            port=new_conn.conn_port or ''),
+                                                new_conn.conn_schema or '', '', '', '')))
+                    print(msg)
+                else:
+                    msg = '\n\tA connection with `conn_id`={conn_id} already exists\n'
+                    msg = msg.format(conn_id=new_conn.conn_id)
+                    print(msg)
