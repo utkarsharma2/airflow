@@ -627,9 +627,10 @@ ARG_INCLUDE_SECRETS = Arg(
     action="store_true",
     default=False)
 ARG_CONN_FILE_PATH = Arg(
-    ('--conn-file-path',),
+    ('--file-path',),
     help='Import connections form a file. Acceptable file formats json, yaml, env.',
     type=str)
+
 # users
 ARG_USERNAME = Arg(
     ('-u', '--username'),
@@ -1101,7 +1102,7 @@ CONNECTIONS_COMMANDS = (
         name='import',
         help='Import connections',
         func=lazy_load_command('airflow.cli.commands.connection_command.connections_import'),
-        args=(ARG_CONN_FILE_PATH),
+        args=(ARG_CONN_FILE_PATH,),
     ),
 )
 USERS_COMMANDS = (
