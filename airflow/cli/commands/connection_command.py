@@ -27,10 +27,7 @@ from airflow.models import Connection
 from airflow.utils import cli as cli_utils
 from airflow.utils.session import create_session
 from airflow.secrets.local_filesystem import load_connections
-<<<<<<< HEAD
 from airflow.exceptions import AirflowException
-=======
->>>>>>> 9934ee9d5fa60626d17cafbf578604f9538f286b
 
 def _tabulate_connection(conns: List[Connection], tablefmt: str):
     tabulate_data = [
