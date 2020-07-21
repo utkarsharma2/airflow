@@ -126,6 +126,7 @@ def connections_add(args):
             msg = msg.format(conn_id=new_conn.conn_id)
             print(msg)
 
+
 @cli_utils.action_logging
 def connections_delete(args):
     """Deletes connection from DB"""
@@ -153,7 +154,6 @@ def connections_delete(args):
             msg = msg.format(conn_id=deleted_conn_id)
             print(msg)
 
-alternative_conn_file_specs = ['file_path']
 
 @cli_utils.action_logging
 def connections_import(args):
