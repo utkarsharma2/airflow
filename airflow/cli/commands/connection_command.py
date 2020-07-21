@@ -26,7 +26,7 @@ from airflow.hooks.base_hook import BaseHook
 from airflow.models import Connection
 from airflow.utils import cli as cli_utils
 from airflow.utils.session import create_session
-from airflow.secrets.local_filesystem import _create_connection,load_connections
+from airflow.secrets.local_filesystem import load_connections
 
 def _tabulate_connection(conns: List[Connection], tablefmt: str):
     tabulate_data = [
