@@ -28,7 +28,7 @@ from airflow.lineage.backend import LineageBackend
 from airflow.utils.session import create_session
 
 if TYPE_CHECKING:
-    from airflow.utils.context import Context
+    from airflow.sdk.definitions.context import Context
 
 PIPELINE_OUTLETS = "pipeline_outlets"
 PIPELINE_INLETS = "pipeline_inlets"
@@ -104,7 +104,7 @@ def prepare_lineage(func: T) -> T:
     * "auto" -> picks up any outlets from direct upstream tasks that have outlets defined, as such that
       if A -> B -> C and B does not have outlets but A does, these are provided as inlets.
     * "list of task_ids" -> picks up outlets from the upstream task_ids
-    * "list of datasets" -> manually defined list of data
+    * "list of datasets" -> manually defined list of dataset
 
     """
 

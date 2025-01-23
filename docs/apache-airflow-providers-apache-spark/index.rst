@@ -49,14 +49,14 @@
     :maxdepth: 1
     :caption: System tests
 
-    System Tests <_api/tests/system/providers/apache/spark/index>
+    System Tests <_api/tests/system/apache/spark/index>
 
 .. toctree::
     :hidden:
     :maxdepth: 1
     :caption: Resources
 
-    Example DAGs <https://github.com/apache/airflow/tree/providers-apache-spark/|version|/tests/system/providers/apache/spark>
+    Example DAGs <https://github.com/apache/airflow/tree/providers-apache-spark/|version|/providers/tests/system/apache/spark>
     PyPI Repository <https://pypi.org/project/apache-airflow-providers-apache-spark/>
     Installing from sources <installing-providers-from-sources>
 
@@ -77,7 +77,7 @@ apache-airflow-providers-apache-spark package
 `Apache Spark <https://spark.apache.org/>`__
 
 
-Release: 4.10.0
+Release: 5.0.0
 
 Provider package
 ----------------
@@ -95,12 +95,12 @@ For the minimum Airflow version supported, see ``Requirements`` below.
 Requirements
 ------------
 
-The minimum Apache Airflow version supported by this provider package is ``2.8.0``.
+The minimum Apache Airflow version supported by this provider package is ``2.9.0``.
 
 ==================  ==================
 PIP package         Version required
 ==================  ==================
-``apache-airflow``  ``>=2.8.0``
+``apache-airflow``  ``>=2.9.0``
 ``pyspark``         ``>=3.1.3``
 ``grpcio-status``   ``>=1.59.0``
 ==================  ==================
@@ -122,6 +122,7 @@ You can install such cross-provider dependencies when installing from PyPI. For 
 Dependent package                                                                                                       Extra
 ======================================================================================================================  ===================
 `apache-airflow-providers-cncf-kubernetes <https://airflow.apache.org/docs/apache-airflow-providers-cncf-kubernetes>`_  ``cncf.kubernetes``
+`apache-airflow-providers-common-compat <https://airflow.apache.org/docs/apache-airflow-providers-common-compat>`_      ``common.compat``
 ======================================================================================================================  ===================
 
 Downloading official packages
@@ -130,5 +131,5 @@ Downloading official packages
 You can download officially released packages and verify their checksums and signatures from the
 `Official Apache Download site <https://downloads.apache.org/airflow/providers/>`_
 
-* `The apache-airflow-providers-apache-spark 4.10.0 sdist package <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_spark-4.10.0.tar.gz>`_ (`asc <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_spark-4.10.0.tar.gz.asc>`__, `sha512 <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_spark-4.10.0.tar.gz.sha512>`__)
-* `The apache-airflow-providers-apache-spark 4.10.0 wheel package <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_spark-4.10.0-py3-none-any.whl>`_ (`asc <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_spark-4.10.0-py3-none-any.whl.asc>`__, `sha512 <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_spark-4.10.0-py3-none-any.whl.sha512>`__)
+* `The apache-airflow-providers-apache-spark 5.0.0 sdist package <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_spark-5.0.0.tar.gz>`_ (`asc <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_spark-5.0.0.tar.gz.asc>`__, `sha512 <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_spark-5.0.0.tar.gz.sha512>`__)
+* `The apache-airflow-providers-apache-spark 5.0.0 wheel package <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_spark-5.0.0-py3-none-any.whl>`_ (`asc <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_spark-5.0.0-py3-none-any.whl.asc>`__, `sha512 <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_spark-5.0.0-py3-none-any.whl.sha512>`__)

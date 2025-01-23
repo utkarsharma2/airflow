@@ -17,49 +17,40 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
 
 import pytest
 from sqlalchemy import select
 
 from airflow.models import DagBag
 from airflow.models.dagbag import DagPriorityParsingRequest
-from airflow.security import permissions
-from tests.test_utils.api_connexion_utils import create_user, delete_user
-from tests.test_utils.db import clear_db_dag_parsing_requests
 
-pytestmark = [pytest.mark.db_test, pytest.mark.skip_if_database_isolation_mode]
+from tests_common.test_utils.api_connexion_utils import create_user, delete_user
+from tests_common.test_utils.db import clear_db_dag_parsing_requests, parse_and_sync_to_db
 
-if TYPE_CHECKING:
-    from airflow.models.dag import DAG
+pytestmark = pytest.mark.db_test
+
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
 EXAMPLE_DAG_FILE = os.path.join("airflow", "example_dags", "example_bash_operator.py")
-EXAMPLE_DAG_ID = "example_bash_operator"
-TEST_DAG_ID = "latest_only"
+TEST_DAG_ID = "example_bash_operator"
 NOT_READABLE_DAG_ID = "latest_only_with_trigger"
-TEST_MULTIPLE_DAGS_ID = "dataset_produces_1"
+TEST_MULTIPLE_DAGS_ID = "asset_produces_1"
 
 
 @pytest.fixture(scope="module")
 def configured_app(minimal_app_for_api):
     app = minimal_app_for_api
     create_user(
-        app,  # type:ignore
+        app,
         username="test",
-        role_name="Test",
-        permissions=[(permissions.ACTION_CAN_EDIT, permissions.RESOURCE_DAG)],  # type: ignore
+        role_name="admin",
     )
-    app.appbuilder.sm.sync_perm_for_dag(  # type: ignore
-        TEST_DAG_ID,
-        access_control={"Test": [permissions.ACTION_CAN_EDIT]},
-    )
-    create_user(app, username="test_no_permissions", role_name="TestNoPermissions")  # type: ignore
+    create_user(app, username="test_no_permissions", role_name=None)
 
     yield app
 
-    delete_user(app, username="test")  # type: ignore
-    delete_user(app, username="test_no_permissions")  # type: ignore
+    delete_user(app, username="test")
+    delete_user(app, username="test_no_permissions")
 
 
 class TestDagParsingRequest:
@@ -77,15 +68,15 @@ class TestDagParsingRequest:
         clear_db_dag_parsing_requests()
 
     def test_201_and_400_requests(self, url_safe_serializer, session):
-        dagbag = DagBag(dag_folder=EXAMPLE_DAG_FILE)
-        dagbag.sync_to_db()
-        test_dag: DAG = dagbag.dags[TEST_DAG_ID]
+        parse_and_sync_to_db(EXAMPLE_DAG_FILE)
+        dagbag = DagBag(read_dags_from_db=True)
+        test_dag = dagbag.get_dag(TEST_DAG_ID)
 
         url = f"/api/v1/parseDagFile/{url_safe_serializer.dumps(test_dag.fileloc)}"
         response = self.client.put(
             url, headers={"Accept": "application/json"}, environ_overrides={"REMOTE_USER": "test"}
         )
-        assert 201 == response.status_code
+        assert response.status_code == 201
         parsing_requests = session.scalars(select(DagPriorityParsingRequest)).all()
         assert parsing_requests[0].fileloc == test_dag.fileloc
 
@@ -93,7 +84,7 @@ class TestDagParsingRequest:
         response = self.client.put(
             url, headers={"Accept": "application/json"}, environ_overrides={"REMOTE_USER": "test"}
         )
-        assert 201 == response.status_code
+        assert response.status_code == 201
         parsing_requests = session.scalars(select(DagPriorityParsingRequest)).all()
         assert parsing_requests[0].fileloc == test_dag.fileloc
 

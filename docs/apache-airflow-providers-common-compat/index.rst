@@ -16,8 +16,8 @@
     specific language governing permissions and limitations
     under the License.
 
-``apache-airflow-providers-common-io``
-=======================================
+``apache-airflow-providers-common-compat``
+==========================================
 
 
 .. toctree::
@@ -62,7 +62,7 @@ apache-airflow-providers-common-compat package
 ``Common Compatibility Provider - providing compatibility code for previous Airflow versions.``
 
 
-Release: 1.2.0
+Release: 1.3.0
 
 Provider package
 ----------------
@@ -80,10 +80,39 @@ For the minimum Airflow version supported, see ``Requirements`` below.
 Requirements
 ------------
 
-The minimum Apache Airflow version supported by this provider package is ``2.8.0``.
+The minimum Apache Airflow version supported by this provider package is ``2.9.0``.
 
 ==================  ==================
 PIP package         Version required
 ==================  ==================
-``apache-airflow``  ``>=2.8.0``
+``apache-airflow``  ``>=2.9.0``
 ==================  ==================
+
+Cross provider package dependencies
+-----------------------------------
+
+Those are dependencies that might be needed in order to use all the features of the package.
+You need to install the specified provider packages in order to use them.
+
+You can install such cross-provider dependencies when installing from PyPI. For example:
+
+.. code-block:: bash
+
+    pip install apache-airflow-providers-common-compat[openlineage]
+
+
+==============================================================================================================  ===============
+Dependent package                                                                                               Extra
+==============================================================================================================  ===============
+`apache-airflow-providers-openlineage <https://airflow.apache.org/docs/apache-airflow-providers-openlineage>`_  ``openlineage``
+`apache-airflow-providers-standard <https://airflow.apache.org/docs/apache-airflow-providers-standard>`_        ``standard``
+==============================================================================================================  ===============
+
+Downloading official packages
+-----------------------------
+
+You can download officially released packages and verify their checksums and signatures from the
+`Official Apache Download site <https://downloads.apache.org/airflow/providers/>`_
+
+* `The apache-airflow-providers-common-compat 1.3.0 sdist package <https://downloads.apache.org/airflow/providers/apache_airflow_providers_common_compat-1.3.0.tar.gz>`_ (`asc <https://downloads.apache.org/airflow/providers/apache_airflow_providers_common_compat-1.3.0.tar.gz.asc>`__, `sha512 <https://downloads.apache.org/airflow/providers/apache_airflow_providers_common_compat-1.3.0.tar.gz.sha512>`__)
+* `The apache-airflow-providers-common-compat 1.3.0 wheel package <https://downloads.apache.org/airflow/providers/apache_airflow_providers_common_compat-1.3.0-py3-none-any.whl>`_ (`asc <https://downloads.apache.org/airflow/providers/apache_airflow_providers_common_compat-1.3.0-py3-none-any.whl.asc>`__, `sha512 <https://downloads.apache.org/airflow/providers/apache_airflow_providers_common_compat-1.3.0-py3-none-any.whl.sha512>`__)

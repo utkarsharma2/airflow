@@ -25,9 +25,17 @@ from unittest import mock
 import pytest
 
 from airflow.utils import file as file_utils
-from airflow.utils.file import correct_maybe_zipped, find_path_from_directory, open_maybe_zipped
+from airflow.utils.file import (
+    correct_maybe_zipped,
+    find_path_from_directory,
+    list_py_file_paths,
+    open_maybe_zipped,
+)
+
 from tests.models import TEST_DAGS_FOLDER
-from tests.test_utils.config import conf_vars
+from tests_common.test_utils.config import conf_vars
+
+TEST_DAG_FOLDER = os.environ["AIRFLOW__CORE__DAGS_FOLDER"]
 
 
 def might_contain_dag(file_path: str, zip_file: zipfile.ZipFile | None = None):
@@ -62,7 +70,7 @@ class TestCorrectMaybeZipped:
 
         assert mocked_is_zipfile.call_count == 1
         (args, kwargs) = mocked_is_zipfile.call_args_list[0]
-        assert "/path/to/archive.zip" == args[0]
+        assert args[0] == "/path/to/archive.zip"
 
         assert dag_folder == "/path/to/archive.zip"
 
@@ -122,7 +130,6 @@ class TestListPyFilesPath:
             "test_invalid_param.py",
             "test_ignore_this.py",
             "test_prev_dagrun_dep.py",
-            "test_retry_handling_job.py",
             "test_nested_dag.py",
             ".airflowignore",
         ]
@@ -211,3 +218,46 @@ class TestListPyFilesPath:
         modules = list(file_utils.iter_airflow_imports(file_path))
 
         assert len(modules) == 0
+
+    def test_list_py_file_paths(self):
+        detected_files = set()
+        expected_files = set()
+        # No_dags is empty, _invalid_ is ignored by .airflowignore
+        ignored_files = {
+            "no_dags.py",
+            "test_invalid_cron.py",
+            "test_invalid_dup_task.py",
+            "test_ignore_this.py",
+            "test_invalid_param.py",
+            "test_invalid_param2.py",
+            "test_invalid_param3.py",
+            "test_invalid_param4.py",
+            "test_nested_dag.py",
+            "test_imports.py",
+            "__init__.py",
+        }
+        for root, _, files in os.walk(TEST_DAG_FOLDER):
+            for file_name in files:
+                if file_name.endswith((".py", ".zip")):
+                    if file_name not in ignored_files:
+                        expected_files.add(f"{root}/{file_name}")
+        detected_files = set(list_py_file_paths(TEST_DAG_FOLDER))
+        assert detected_files == expected_files
+
+
+@pytest.mark.parametrize(
+    "edge_filename, expected_modification",
+    [
+        ("test_dag.py", "unusual_prefix_mocked_path_hash_sha1_test_dag"),
+        ("test-dag.py", "unusual_prefix_mocked_path_hash_sha1_test_dag"),
+        ("test-dag-1.py", "unusual_prefix_mocked_path_hash_sha1_test_dag_1"),
+        ("test-dag_1.py", "unusual_prefix_mocked_path_hash_sha1_test_dag_1"),
+        ("test-dag.dev.py", "unusual_prefix_mocked_path_hash_sha1_test_dag_dev"),
+        ("test_dag.prod.py", "unusual_prefix_mocked_path_hash_sha1_test_dag_prod"),
+    ],
+)
+def test_get_unique_dag_module_name(edge_filename, expected_modification):
+    with mock.patch("hashlib.sha1") as mocked_sha1:
+        mocked_sha1.return_value.hexdigest.return_value = "mocked_path_hash_sha1"
+        modify_module_name = file_utils.get_unique_dag_module_name(edge_filename)
+        assert modify_module_name == expected_modification

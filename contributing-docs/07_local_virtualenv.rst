@@ -19,7 +19,7 @@
 Local Virtual Environment (virtualenv)
 ======================================
 
-The easiest wey to run tests for Airflow is to use local virtualenv. While Breeze is the recommended
+The easiest way to run tests for Airflow is to use local virtualenv. While Breeze is the recommended
 way to run tests - because it provides a reproducible environment and is easy to set up, it is not
 always the best option as you need to run your tests inside a docker container. This might make it
 harder to debug the tests and to use your IDE to run them.
@@ -28,22 +28,23 @@ That's why we recommend using local virtualenv for development and testing.
 
 **The outline for this document in GitHub is available at top-right corner button (with 3-dots and 3 lines).**
 
-Installation in local virtualenv
---------------------------------
-
 Required Software Packages
-..........................
+--------------------------
 
 Use system-level package managers like yum, apt-get for Linux, or
 Homebrew for macOS to install required software packages:
 
-* Python (One of: 3.8, 3.9, 3.10, 3.11, 3.12)
+* Python (One of: 3.9, 3.10, 3.11, 3.12)
 * MySQL 5.7+
 * libxml
 * helm (only for helm chart tests)
 
-Refer to the `Dockerfile.ci <../Dockerfile.ci>`__ for a comprehensive list
-of required packages.
+There are also sometimes other system level packages needed to install python packages - especially
+those that are coming from providers. For example you might need to install ``pkgconf`` to be able to
+install ``mysqlclient`` package for ``mysql`` provider . Or you might need to install ``graphviz`` to be able to install
+``devel`` extra bundle.
+
+Please refer to the `Dockerfile.ci <../Dockerfile.ci>`__ for a comprehensive list of required packages.
 
 .. note::
 
@@ -61,25 +62,151 @@ of required packages.
    released wheel packages.
 
 
-Installing Airflow
-..................
+Creating and maintaining local virtualenv with uv
+-------------------------------------------------
 
-The simplest way to install Airflow in local virtualenv is to use ``pip``:
+As of November 2024 we are recommending to use ``uv`` for local virtualenv management for Airflow development.
+The ``uv`` utility is a build frontend tool that is designed to manage python, virtualenvs and workspaces for development
+and testing of Python projects. It is a modern tool that is designed to work with PEP 517/518 compliant projects
+and it is much faster than "reference" ``pip`` tool. It has extensive support to not only create development
+environment but also to manage python versions, development environments, workspaces and Python tools used
+to develop Airflow (via ``uv tool`` command - such as ``pre-commit`` and others, you can also use ``uv tool``
+to install ``breeze`` - containerized development environment for Airflow that we use to reproduce the
+CI environment locally and to run release-management and certain development tasks.
+
+You can read more about ``uv`` in `UV Getting started <https://docs.astral.sh/uv/getting-started/>`_ but
+below you will find a few typical steps to get you started with ``uv``.
+
+Installing uv
+.............
+
+You can follow the `installation instructions <https://docs.astral.sh/uv/getting-started/installation/>`_ to install
+``uv`` on your system. Once you have ``uv`` installed, you can do all the environment preparation tasks using
+``uv`` commands.
+
+Installing Python versions
+..........................
+
+You can install Python versions using ``uv python install`` command. For example, to install Python 3.9.7, you can run:
 
 .. code:: bash
 
-    pip install -e ".[devel,<OTHER EXTRAS>]" # for example: pip install -e ".[devel,google,postgres]"
+    uv python install 3.9.7
 
-This will install Airflow in 'editable' mode - where sources of Airflow are taken directly from the source
-code rather than moved to the installation directory. You need to run this command in the virtualenv you
-want to install Airflow in - and you need to have the virtualenv activated.
+This is optional step - ``uv`` will automatically install the Python version you need when you create a virtualenv.
 
-While you can use any virtualenv manager, we recommend using `Hatch <https://hatch.pypa.io/latest/>`__
-as your development environment front-end, and we already use Hatch backend ``hatchling`` for Airflow.
+Creating virtualenvs with uv
+............................
 
-Hatchling is automatically installed when you build Airflow but since airflow build system uses
-``PEP`` compliant ``pyproject.toml`` file, you can use any front-end build system that supports
-``PEP 517`` and ``PEP 518``. You can also use ``pip`` to install Airflow in editable mode.
+.. code:: bash
+
+    uv venv
+
+This will create a default venv in your project's ``.venv`` directory. You can also create a venv
+with a specific Python version by running:
+
+.. code:: bash
+
+    uv venv --python 3.9.7
+
+You can also create a venv with a different venv directory name by running:
+
+.. code:: bash
+
+    uv venv .my-venv
+
+However ``uv`` creation/re-creation of venvs is so fast that you can easily create and delete venvs as needed.
+So usually you do not need to have more than one venv and recreate it as needed - for example when you
+need to change the python version.
+
+Syncing project (including providers) with uv
+.............................................
+
+In a project like airflow it's important to have a consistent set of dependencies across all developers.
+You can use ``uv sync`` to install dependencies from ``pyproject.toml`` file. This will install all dependencies
+from the ``pyproject.toml`` file in the current directory.
+
+.. note::
+
+   We are currently in the process of moving providers from old structure (where all providers were under
+   ``providers/src`` directory in a package structure shared between Providers) to a new structure
+   where each provider is a separate python package in ``providers`` directory. The "old" providers support
+   will be removed once we move all the providers to the new structure.
+
+
+.. code:: bash
+
+    uv sync
+
+If you also need to install development and provider dependencies you can specify extras for that providers:
+
+.. code:: bash
+
+    uv sync --extra devel --extra devel-tests --extra google
+
+This will synchronize all extras that you need for development and testing of Airflow and google provider
+dependencies - including their runtime dependencies.
+
+.. code:: bash
+
+    uv sync --all-extras
+
+This will synchronize all extras of airflow (this might require some system dependencies to be installed).
+
+.. note::
+
+   For the providers that are already moved to the new structure (i.e. have separate folder in
+   ``providers`` directory), you do not need to add ``extras`` - they provider dependencies are
+   automatically installed when you run ``uv sync``
+
+
+
+Creating and installing airflow with other build-frontends
+----------------------------------------------------------
+
+While ``uv`` uses ``workspace`` feature to synchronize both Airflow and Providers in a single sync
+command, you can still use other frontend tools (such as ``pip``) to install Airflow and Providers
+and to develop them without relying on ``sync`` and ``workspace`` features of ``uv``. Below chapters
+describe how to do it with ``pip``.
+
+Installing Airflow with pip
+...........................
+
+Since Airflow follows the standards define by the packaging community, we are not bound with
+``uv`` as the only tool to manage virtualenvs - and you can use any other compliant frontends to install
+airflow for development. The standard way of installing environment with dependencies necessary to
+run tests is to use ``pip`` to install airflow dependencies:
+
+.. code:: bash
+
+    pip install -e "./providers"
+    pip install -e ".[devel,devel-tests,<OTHER EXTRAS>]" # for example: pip install -e ".[devel,devel-tests,google,postgres]"
+
+This will install:
+
+* old structure provider sources in ``editabl`e` mode - where sources are read from ``providers`` folder.
+* airflow in ``editable`` mode - where sources of Airflow are taken directly from ``airflow`` source code.
+
+You need to run this command in the virtualenv you want to install Airflow in -
+and you need to have the virtualenv activated.
+
+.. note::
+
+   For the providers that are already moved (i.e. have separate folder in ``providers`` directory), instead
+   of adding extra in airflow command you need to separately install the provider in the same venv. For example
+   to install ``airbyte`` provider you can run:
+
+   .. code:: bash
+
+       pip install -e "./providers"
+       pip install -e ".[devel,devel-tests,<OTHER EXTRAS>]" # for example: pip install -e ".[devel,devel-tests,google,postgres]"
+       pip install -e "./providers/airbyte[devel]"
+
+   This will install:
+
+       * old structure provider sources in ``editable`` mode - where sources are read from ``providers/src`` folder
+       * airflow in ``editable`` mode - where sources of Airflow are taken directly from ``airflow`` source code.
+       * airbyte provider in ``editable`` mode - where sources are read from ``providers/airbyte`` folder
 
 Extras (optional dependencies)
 ..............................
@@ -125,172 +252,26 @@ The full list of extras is available in `pyproject.toml <../pyproject.toml>`_ an
    If you wish to install airflow using those tools you should use the constraint files and convert
    them to appropriate format and workflow that your tool requires.
 
+Developing community providers in local virtualenv
+..................................................
 
-Using Hatch
------------
+While the above installation is good enough to work on Airflow code, in order to develop
+providers, you also need to install them in the virtualenv you work on (after installing
+the extras in airflow, that correspond to the provider you want to develop).
 
-Airflow uses `hatch <https://hatch.pypa.io/>`_ as a build and development tool of choice. It is one of popular
-build tools and environment managers for Python, maintained by the Python Packaging Authority.
-It is an optional tool that is only really needed when you want to build packages from sources, but
-it is also very convenient to manage your Python versions and virtualenvs.
-
-Airflow project contains some pre-defined virtualenv definitions in ``pyproject.toml`` that can be
-easily used by hatch to create your local venvs. This is not necessary for you to develop and test
-Airflow, but it is a convenient way to manage your local Python versions and virtualenvs.
-
-Installing Hatch
-................
-
-You can install hat using various other ways (including Gui installers).
-
-Example using ``pipx``:
+If you want to develop google providers, for example you can run the following commands:
 
 .. code:: bash
 
-    pipx install hatch
+    pip install -e ".[devel,devel-tests,google]"
+    pip install -e "./providers"
 
-We recommend using ``pipx`` as you can manage installed Python apps easily and later use it
-to upgrade ``hatch`` easily as needed with:
+The first command installs airflow, it's development dependencies, test dependencies and
+both runtime and development dependencies of the google provider.
 
-.. code:: bash
+The second one installs providers source code in development mode, so that modifications
+to the code are automatically reflected in your installed virtualenv.
 
-    pipx upgrade hatch
-
-Using Hatch to manage your Python versions
-..........................................
-
-You can also use hatch to install and manage airflow virtualenvs and development
-environments. For example, you can install Python 3.10 with this command:
-
-.. code:: bash
-
-    hatch python install 3.10
-
-or install all Python versions that are used in Airflow:
-
-.. code:: bash
-
-    hatch python install all
-
-Manage your virtualenvs with Hatch
-..................................
-
-Airflow has some pre-defined virtualenvs that you can use to develop and test airflow.
-You can see the list of available envs with:
-
-.. code:: bash
-
-    hatch env show
-
-This is what it shows currently:
-
-+-------------+---------+---------------------------------------------------------------+
-| Name        | Type    | Description                                                   |
-+=============+=========+===============================================================+
-| default     | virtual | Default environment with Python 3.8 for maximum compatibility |
-+-------------+---------+---------------------------------------------------------------+
-| airflow-38  | virtual | Environment with Python 3.8. No devel installed.              |
-+-------------+---------+---------------------------------------------------------------+
-| airflow-39  | virtual | Environment with Python 3.9. No devel installed.              |
-+-------------+---------+---------------------------------------------------------------+
-| airflow-310 | virtual | Environment with Python 3.10. No devel installed.             |
-+-------------+---------+---------------------------------------------------------------+
-| airflow-311 | virtual | Environment with Python 3.11. No devel installed              |
-+-------------+---------+---------------------------------------------------------------+
-| airflow-312 | virtual | Environment with Python 3.12. No devel installed              |
-+-------------+---------+---------------------------------------------------------------+
-
-The default env (if you have not used one explicitly) is ``default`` and it is a Python 3.8
-virtualenv for maximum compatibility. You can install devel set of dependencies with it
-by running:
-
-.. code:: bash
-
-    pip install -e ".[devel]"
-
-After entering the environment.
-
-The other environments are just bare-bones Python virtualenvs with Airflow core requirements only,
-without any extras installed and without any tools. They are much faster to create than the default
-environment, and you can manually install either appropriate extras or directly tools that you need for
-testing or development.
-
-.. code:: bash
-
-    hatch env create
-
-You can create specific environment by using them in create command:
-
-.. code:: bash
-
-    hatch env create airflow-310
-
-You can install extras in the environment by running pip command:
-
-.. code:: bash
-
-    hatch -e airflow-310 run -- pip install -e ".[devel,google]"
-
-And you can enter the environment with running a shell of your choice (for example zsh) where you
-can run any commands
-
-.. code:: bash
-
-    hatch -e airflow-310 shell
-
-
-Once you are in the environment (indicated usually by updated prompt), you can just install
-extra dependencies you need:
-
-.. code:: bash
-
-    [~/airflow] [airflow-310] pip install -e ".[devel,google]"
-
-
-You can also see where hatch created the virtualenvs and use it in your IDE or activate it manually:
-
-.. code:: bash
-
-    hatch env find airflow-310
-
-You will get path similar to:
-
-.. code::
-
-    /Users/jarek/Library/Application Support/hatch/env/virtual/apache-airflow/TReRdyYt/apache-airflow
-
-Then you will find ``python`` binary and ``activate`` script in the ``bin`` sub-folder of this directory and
-you can configure your IDE to use this python virtualenv if you want to use that environment in your IDE.
-
-You can also set default environment name by HATCH_ENV environment variable.
-
-You can clean the env by running:
-
-.. code:: bash
-
-    hatch env prune
-
-More information about hatch can be found in `Hatch: Environments <https://hatch.pypa.io/latest/environment/>`__
-
-Using Hatch to build your packages
-..................................
-
-You can use hatch to build installable package from the airflow sources. Such package will
-include all metadata that is configured in ``pyproject.toml`` and will be installable with pip.
-
-The packages will have pre-installed dependencies for providers that are always
-installed when Airflow is installed from PyPI. By default both ``wheel`` and ``sdist`` packages are built.
-
-.. code:: bash
-
-    hatch build
-
-You can also build only ``wheel`` or ``sdist`` packages:
-
-.. code:: bash
-
-    hatch build -t wheel
-    hatch build -t sdist
 
 Local and Remote Debugging in IDE
 ---------------------------------
@@ -352,18 +333,32 @@ install multiple extra dependencies at a time:
 
     pip install -e ".[devel,apache-beam,dbt-cloud]"
 
-The dependencies for providers are configured in ``airflow/providers/PROVIDERS_FOLDER/provider.yaml`` file -
+.. note::
+
+   We are currently in the process of separating out providers to separate subprojects. This means that
+   "old" providers related code is split across multiple directories "providers", "docs" and that the
+   ``pyproject.toml`` files for them are dynamically generated when provider is built. The "new" providers
+   have all the files stored in the same "subfolder" of "providers" folder (for example all "airbyte" related
+   code is stored in "providers/airbyte" and there is an airbyte "pyproject.toml" stored in that folder and
+   the project is effectively a separate python project. It will take a while to migrate all the providers
+   to the new structure, so you might see both structures in the repository for some time.
+
+The dependencies for providers are configured in ``providers/src/*/provider.yaml`` files for new file
+structure and in ``providers/*/pyproject.toml`` in case of new structure for providers -
 separately for each provider. You can find there two types of ``dependencies`` - production runtime
-dependencies, and sometimes ``devel-dependencies`` which are needed to run tests. While ``provider.yaml``
-file is the single source of truth for the dependencies, eventually they need to find its way to Airflow`s
-``pyproject.toml``. This is done by running:
+dependencies, and sometimes ``devel-dependencies`` which are needed to run tests.
+
+In case of old provider structure - while ``provider.yaml`` file is the single source of truth for the
+dependencies, eventually they need to find its way to Airflow`s ``pyproject.toml``.
+This is done by running:
 
 .. code:: bash
 
     pre-commit run update-providers-dependencies --all-files
 
-This will update ``pyproject.toml`` with the dependencies from ``provider.yaml`` files and from there
-it will be used automatically when you install Airflow in editable mode.
+This will update ``generated/provider_dependencies.json`` file with the dependencies from ``provider.yaml``
+files and from there it will be used automatically used when you install Airflow in editable mode, and
+it is used to dynamically generate ``pyproject.toml`` for providers in the old structure of providers.
 
 If you want to add another dependency to a provider, you should add it to corresponding ``provider.yaml``,
 run the command above and commit the changes to ``pyproject.toml``. Then running
@@ -371,22 +366,30 @@ run the command above and commit the changes to ``pyproject.toml``. Then running
 install the dependencies automatically when you create or switch to a development environment.
 
 
-Installing recommended version of dependencies
-----------------------------------------------
+Installing "golden" version of dependencies
+-------------------------------------------
 
 Whatever virtualenv solution you use, when you want to make sure you are using the same
-version of dependencies as in main, you can install recommended version of the dependencies by using
+version of dependencies as in main, you can install recommended version of the dependencies by using pip:
 constraint-python<PYTHON_MAJOR_MINOR_VERSION>.txt files as ``constraint`` file. This might be useful
 to avoid "works-for-me" syndrome, where you use different version of dependencies than the ones
 that are used in main, CI tests and by other contributors.
 
 There are different constraint files for different python versions. For example this command will install
-all basic devel requirements and requirements of google provider as last successfully tested for Python 3.8:
+all basic devel requirements and requirements of google provider as last successfully tested for Python 3.9:
 
 .. code:: bash
 
     pip install -e ".[devel,google]" \
-      --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-main/constraints-source-providers-3.8.txt"
+      --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-main/constraints-source-providers-3.9.txt"
+
+Or with ``uv``:
+
+.. code:: bash
+
+    uv pip install -e ".[devel,google]" \
+      --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-main/constraints-source-providers-3.9.txt"
+
 
 Make sure to use latest main for such installation, those constraints are "development constraints" and they
 are refreshed several times a day to make sure they are up to date with the latest changes in the main branch.
@@ -403,7 +406,7 @@ and install to latest supported ones by pure airflow core.
 .. code:: bash
 
     pip install -e ".[devel]" \
-      --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-main/constraints-no-providers-3.8.txt"
+      --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-main/constraints-no-providers-3.9.txt"
 
 These are examples of the development options available with the local virtualenv in your IDE:
 

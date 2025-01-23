@@ -16,11 +16,15 @@
 # under the License.
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from airflow.www import app
-from tests.test_utils.config import conf_vars
-from tests.test_utils.decorators import dont_initialize_flask_app_submodules
+
+from tests_common.test_utils.config import conf_vars
+from tests_common.test_utils.db import parse_and_sync_to_db
+from tests_common.test_utils.decorators import dont_initialize_flask_app_submodules
 
 
 @pytest.fixture(scope="session")
@@ -36,9 +40,16 @@ def minimal_app_for_api():
         ]
     )
     def factory():
-        with conf_vars({("api", "auth_backends"): "tests.test_utils.remote_user_api_auth_backend"}):
+        with conf_vars(
+            {
+                ("api", "auth_backends"): "tests_common.test_utils.remote_user_api_auth_backend",
+                (
+                    "core",
+                    "auth_manager",
+                ): "airflow.auth.managers.simple.simple_auth_manager.SimpleAuthManager",
+            }
+        ):
             _app = app.create_app(testing=True, config={"WTF_CSRF_ENABLED": False})  # type:ignore
-            _app.config["AUTH_ROLE_PUBLIC"] = None
             return _app
 
     return factory()
@@ -56,16 +67,5 @@ def session():
 def dagbag():
     from airflow.models import DagBag
 
-    DagBag(include_examples=True, read_dags_from_db=False).sync_to_db()
-    return DagBag(include_examples=True, read_dags_from_db=True)
-
-
-@pytest.fixture
-def set_auto_role_public(request):
-    app = request.getfixturevalue("minimal_app_for_api")
-    auto_role_public = app.config["AUTH_ROLE_PUBLIC"]
-    app.config["AUTH_ROLE_PUBLIC"] = request.param
-
-    yield
-
-    app.config["AUTH_ROLE_PUBLIC"] = auto_role_public
+    parse_and_sync_to_db(os.devnull, include_examples=True)
+    return DagBag(read_dags_from_db=True)

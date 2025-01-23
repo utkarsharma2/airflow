@@ -81,8 +81,9 @@ class TestCleanupPods:
             show_only=["templates/cleanup/cleanup-cronjob.yaml"],
         )
 
-        assert "airflow-cleanup-pods" == jmespath.search(
-            "spec.jobTemplate.spec.template.spec.containers[0].name", docs[0]
+        assert (
+            jmespath.search("spec.jobTemplate.spec.template.spec.containers[0].name", docs[0])
+            == "airflow-cleanup-pods"
         )
         assert jmespath.search("spec.jobTemplate.spec.template.spec.containers[0].image", docs[0]).startswith(
             "apache/airflow"
@@ -96,6 +97,8 @@ class TestCleanupPods:
             "subPath": "airflow.cfg",
             "readOnly": True,
         } in jmespath.search("spec.jobTemplate.spec.template.spec.containers[0].volumeMounts", docs[0])
+        assert "successfulJobsHistoryLimit" not in docs[0]["spec"]
+        assert "failedJobsHistoryLimit" not in docs[0]["spec"]
 
     def test_should_pass_validation_with_v1beta1_api(self):
         render_chart(
@@ -113,8 +116,9 @@ class TestCleanupPods:
             show_only=["templates/cleanup/cleanup-cronjob.yaml"],
         )
 
-        assert "airflow:test" == jmespath.search(
-            "spec.jobTemplate.spec.template.spec.containers[0].image", docs[0]
+        assert (
+            jmespath.search("spec.jobTemplate.spec.template.spec.containers[0].image", docs[0])
+            == "airflow:test"
         )
 
     def test_should_create_valid_affinity_tolerations_and_node_selector(self):
@@ -144,22 +148,31 @@ class TestCleanupPods:
             show_only=["templates/cleanup/cleanup-cronjob.yaml"],
         )
 
-        assert "CronJob" == jmespath.search("kind", docs[0])
-        assert "foo" == jmespath.search(
-            "spec.jobTemplate.spec.template.spec.affinity.nodeAffinity."
-            "requiredDuringSchedulingIgnoredDuringExecution."
-            "nodeSelectorTerms[0]."
-            "matchExpressions[0]."
-            "key",
-            docs[0],
+        assert jmespath.search("kind", docs[0]) == "CronJob"
+        assert (
+            jmespath.search(
+                "spec.jobTemplate.spec.template.spec.affinity.nodeAffinity."
+                "requiredDuringSchedulingIgnoredDuringExecution."
+                "nodeSelectorTerms[0]."
+                "matchExpressions[0]."
+                "key",
+                docs[0],
+            )
+            == "foo"
         )
-        assert "ssd" == jmespath.search(
-            "spec.jobTemplate.spec.template.spec.nodeSelector.diskType",
-            docs[0],
+        assert (
+            jmespath.search(
+                "spec.jobTemplate.spec.template.spec.nodeSelector.diskType",
+                docs[0],
+            )
+            == "ssd"
         )
-        assert "dynamic-pods" == jmespath.search(
-            "spec.jobTemplate.spec.template.spec.tolerations[0].key",
-            docs[0],
+        assert (
+            jmespath.search(
+                "spec.jobTemplate.spec.template.spec.tolerations[0].key",
+                docs[0],
+            )
+            == "dynamic-pods"
         )
 
     def test_scheduler_name(self):
@@ -168,9 +181,12 @@ class TestCleanupPods:
             show_only=["templates/cleanup/cleanup-cronjob.yaml"],
         )
 
-        assert "airflow-scheduler" == jmespath.search(
-            "spec.jobTemplate.spec.template.spec.schedulerName",
-            docs[0],
+        assert (
+            jmespath.search(
+                "spec.jobTemplate.spec.template.spec.schedulerName",
+                docs[0],
+            )
+            == "airflow-scheduler"
         )
 
     def test_default_command_and_args(self):
@@ -179,9 +195,11 @@ class TestCleanupPods:
         )
 
         assert jmespath.search("spec.jobTemplate.spec.template.spec.containers[0].command", docs[0]) is None
-        assert ["bash", "-c", "exec airflow kubernetes cleanup-pods --namespace=default"] == jmespath.search(
-            "spec.jobTemplate.spec.template.spec.containers[0].args", docs[0]
-        )
+        assert jmespath.search("spec.jobTemplate.spec.template.spec.containers[0].args", docs[0]) == [
+            "bash",
+            "-c",
+            "exec airflow kubernetes cleanup-pods --namespace=default",
+        ]
 
     def test_should_add_extraEnvs(self):
         docs = render_chart(
@@ -223,10 +241,10 @@ class TestCleanupPods:
             show_only=["templates/cleanup/cleanup-cronjob.yaml"],
         )
 
-        assert ["release-name"] == jmespath.search(
-            "spec.jobTemplate.spec.template.spec.containers[0].command", docs[0]
-        )
-        assert ["Helm"] == jmespath.search("spec.jobTemplate.spec.template.spec.containers[0].args", docs[0])
+        assert jmespath.search("spec.jobTemplate.spec.template.spec.containers[0].command", docs[0]) == [
+            "release-name"
+        ]
+        assert jmespath.search("spec.jobTemplate.spec.template.spec.containers[0].args", docs[0]) == ["Helm"]
 
     def test_should_set_labels_to_jobs_from_cronjob(self):
         docs = render_chart(
@@ -237,12 +255,12 @@ class TestCleanupPods:
             show_only=["templates/cleanup/cleanup-cronjob.yaml"],
         )
 
-        assert {
+        assert jmespath.search("spec.jobTemplate.spec.template.metadata.labels", docs[0]) == {
             "tier": "airflow",
             "component": "airflow-cleanup-pods",
             "release": "release-name",
             "project": "airflow",
-        } == jmespath.search("spec.jobTemplate.spec.template.metadata.labels", docs[0])
+        }
 
     def test_should_add_component_specific_labels(self):
         docs = render_chart(
@@ -275,17 +293,17 @@ class TestCleanupPods:
 
         assert "test_cronjob_annotation" in jmespath.search("metadata.annotations", docs[0])
         assert (
-            "test_cronjob_annotation_value"
-            == jmespath.search("metadata.annotations", docs[0])["test_cronjob_annotation"]
+            jmespath.search("metadata.annotations", docs[0])["test_cronjob_annotation"]
+            == "test_cronjob_annotation_value"
         )
         assert "test_pod_annotation" in jmespath.search(
             "spec.jobTemplate.spec.template.metadata.annotations", docs[0]
         )
         assert (
-            "test_pod_annotation_value"
-            == jmespath.search("spec.jobTemplate.spec.template.metadata.annotations", docs[0])[
+            jmespath.search("spec.jobTemplate.spec.template.metadata.annotations", docs[0])[
                 "test_pod_annotation"
             ]
+            == "test_pod_annotation_value"
         )
 
     def test_cleanup_resources_are_configurable(self):
@@ -324,8 +342,22 @@ class TestCleanupPods:
             },
             show_only=["templates/cleanup/cleanup-cronjob.yaml"],
         )
-        assert 2 == jmespath.search("spec.failedJobsHistoryLimit", docs[0])
-        assert 4 == jmespath.search("spec.successfulJobsHistoryLimit", docs[0])
+        assert jmespath.search("spec.failedJobsHistoryLimit", docs[0]) == 2
+        assert jmespath.search("spec.successfulJobsHistoryLimit", docs[0]) == 4
+
+    def test_should_set_zero_job_history_limits(self):
+        docs = render_chart(
+            values={
+                "cleanup": {
+                    "enabled": True,
+                    "failedJobsHistoryLimit": 0,
+                    "successfulJobsHistoryLimit": 0,
+                },
+            },
+            show_only=["templates/cleanup/cleanup-cronjob.yaml"],
+        )
+        assert jmespath.search("spec.failedJobsHistoryLimit", docs[0]) == 0
+        assert jmespath.search("spec.successfulJobsHistoryLimit", docs[0]) == 0
 
     def test_no_airflow_local_settings(self):
         docs = render_chart(
@@ -354,6 +386,24 @@ class TestCleanupPods:
             "subPath": "airflow_local_settings.py",
             "readOnly": True,
         } in jmespath.search("spec.jobTemplate.spec.template.spec.containers[0].volumeMounts", docs[0])
+
+    def test_global_volumes_and_volume_mounts(self):
+        docs = render_chart(
+            values={
+                "cleanup": {"enabled": True},
+                "volumes": [{"name": "test-volume", "emptyDir": {}}],
+                "volumeMounts": [{"name": "test-volume", "mountPath": "/test"}],
+            },
+            show_only=["templates/cleanup/cleanup-cronjob.yaml"],
+        )
+        assert {
+            "name": "test-volume",
+            "mountPath": "/test",
+        } in jmespath.search("spec.jobTemplate.spec.template.spec.containers[0].volumeMounts", docs[0])
+        assert {
+            "name": "test-volume",
+            "emptyDir": {},
+        } in jmespath.search("spec.jobTemplate.spec.template.spec.volumes", docs[0])
 
 
 class TestCleanupServiceAccount:

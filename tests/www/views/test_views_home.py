@@ -22,17 +22,22 @@ import flask
 import markupsafe
 import pytest
 
-from airflow.dag_processing.processor import DagFileProcessor
+from airflow.models.errors import ParseImportError
 from airflow.security import permissions
 from airflow.utils.state import State
 from airflow.www.utils import UIAlert
 from airflow.www.views import FILTER_LASTRUN_COOKIE, FILTER_STATUS_COOKIE, FILTER_TAGS_COOKIE
-from tests.test_utils.api_connexion_utils import create_user
-from tests.test_utils.db import clear_db_dags, clear_db_import_errors, clear_db_serialized_dags
-from tests.test_utils.permissions import _resource_name
-from tests.test_utils.www import check_content_in_response, check_content_not_in_response, client_with_login
 
-pytestmark = pytest.mark.db_test
+from providers.tests.fab.auth_manager.api_endpoints.api_connexion_utils import create_user
+from tests_common.test_utils.db import clear_db_dags, clear_db_import_errors, clear_db_serialized_dags
+from tests_common.test_utils.permissions import _resource_name
+from tests_common.test_utils.www import (
+    check_content_in_response,
+    check_content_not_in_response,
+    client_with_login,
+)
+
+pytestmark = [pytest.mark.db_test, pytest.mark.need_serialized_dag]
 
 
 def clean_db():
@@ -42,7 +47,7 @@ def clean_db():
 
 
 @pytest.fixture(autouse=True)
-def setup():
+def _setup():
     clean_db()
     yield
     clean_db()
@@ -72,7 +77,7 @@ def test_home(capture_templates, admin_client):
 
 
 @mock.patch("airflow.www.views.AirflowBaseView.render_template")
-def test_home_dags_count(render_template_mock, admin_client, working_dags, session):
+def test_home_dags_count(render_template_mock, admin_client, _working_dags, session):
     from sqlalchemy import update
 
     from airflow.models.dag import DagModel
@@ -93,25 +98,25 @@ def test_home_dags_count(render_template_mock, admin_client, working_dags, sessi
 def test_home_status_filter_cookie(admin_client):
     with admin_client:
         admin_client.get("home", follow_redirects=True)
-        assert "all" == flask.session[FILTER_STATUS_COOKIE]
+        assert flask.session[FILTER_STATUS_COOKIE] == "all"
 
         admin_client.get("home?status=active", follow_redirects=True)
-        assert "active" == flask.session[FILTER_STATUS_COOKIE]
+        assert flask.session[FILTER_STATUS_COOKIE] == "active"
 
         admin_client.get("home?status=paused", follow_redirects=True)
-        assert "paused" == flask.session[FILTER_STATUS_COOKIE]
+        assert flask.session[FILTER_STATUS_COOKIE] == "paused"
 
         admin_client.get("home?status=all", follow_redirects=True)
-        assert "all" == flask.session[FILTER_STATUS_COOKIE]
+        assert flask.session[FILTER_STATUS_COOKIE] == "all"
 
         admin_client.get("home?lastrun=running", follow_redirects=True)
-        assert "running" == flask.session[FILTER_LASTRUN_COOKIE]
+        assert flask.session[FILTER_LASTRUN_COOKIE] == "running"
 
         admin_client.get("home?lastrun=failed", follow_redirects=True)
-        assert "failed" == flask.session[FILTER_LASTRUN_COOKIE]
+        assert flask.session[FILTER_LASTRUN_COOKIE] == "failed"
 
         admin_client.get("home?lastrun=all_states", follow_redirects=True)
-        assert "all_states" == flask.session[FILTER_LASTRUN_COOKIE]
+        assert flask.session[FILTER_LASTRUN_COOKIE] == "all_states"
 
 
 @pytest.fixture(scope="module")
@@ -198,93 +203,77 @@ TEST_FILTER_DAG_IDS = ["filter_test_1", "filter_test_2", "a_first_dag_id_asc", "
 TEST_TAGS = ["example", "test", "team", "group"]
 
 
-def _process_file(file_path):
-    dag_file_processor = DagFileProcessor(dag_ids=[], dag_directory="/tmp", log=mock.MagicMock())
-    dag_file_processor.process_file(file_path, [], False)
+@pytest.fixture
+def _working_dags(dag_maker):
+    for dag_id, tag in zip(TEST_FILTER_DAG_IDS, TEST_TAGS):
+        with dag_maker(dag_id=dag_id, fileloc=f"/{dag_id}.py", tags=[tag]):
+            # We need to enter+exit the dag maker context for it to create the dag
+            pass
 
 
 @pytest.fixture
-def working_dags(tmp_path):
-    dag_contents_template = "from airflow import DAG\ndag = DAG('{}', schedule=None, tags=['{}'])"
+def _working_dags_with_read_perm(dag_maker):
     for dag_id, tag in zip(TEST_FILTER_DAG_IDS, TEST_TAGS):
-        path = tmp_path / f"{dag_id}.py"
-        path.write_text(dag_contents_template.format(dag_id, tag))
-        _process_file(path)
-
-
-@pytest.fixture
-def working_dags_with_read_perm(tmp_path):
-    dag_contents_template = "from airflow import DAG\ndag = DAG('{}', schedule=None, tags=['{}'])"
-    dag_contents_template_with_read_perm = (
-        "from airflow import DAG\ndag = DAG('{}', schedule=None, tags=['{}'], "
-        "access_control={{'role_single_dag':{{'can_read'}}}}) "
-    )
-    for dag_id, tag in zip(TEST_FILTER_DAG_IDS, TEST_TAGS):
-        path = tmp_path / f"{dag_id}.py"
         if dag_id == "filter_test_1":
-            path.write_text(dag_contents_template_with_read_perm.format(dag_id, tag))
+            access_control = {"role_single_dag": {"can_read"}}
         else:
-            path.write_text(dag_contents_template.format(dag_id, tag))
-        _process_file(path)
+            access_control = None
+
+        with dag_maker(dag_id=dag_id, fileloc=f"/{dag_id}.py", tags=[tag], access_control=access_control):
+            pass
 
 
 @pytest.fixture
-def working_dags_with_edit_perm(tmp_path):
-    dag_contents_template = "from airflow import DAG\ndag = DAG('{}', schedule=None, tags=['{}'])"
-    dag_contents_template_with_read_perm = (
-        "from airflow import DAG\ndag = DAG('{}', schedule=None, tags=['{}'], "
-        "access_control={{'role_single_dag':{{'can_edit'}}}}) "
-    )
+def _working_dags_with_edit_perm(dag_maker):
     for dag_id, tag in zip(TEST_FILTER_DAG_IDS, TEST_TAGS):
-        path = tmp_path / f"{dag_id}.py"
         if dag_id == "filter_test_1":
-            path.write_text(dag_contents_template_with_read_perm.format(dag_id, tag))
+            access_control = {"role_single_dag": {"can_edit"}}
         else:
-            path.write_text(dag_contents_template.format(dag_id, tag))
-        _process_file(path)
+            access_control = None
+
+        with dag_maker(dag_id=dag_id, fileloc=f"/{dag_id}.py", tags=[tag], access_control=access_control):
+            pass
 
 
 @pytest.fixture
-def broken_dags(tmp_path, working_dags):
+def _broken_dags(session):
+    from airflow.models.errors import ParseImportError
+
     for dag_id in TEST_FILTER_DAG_IDS:
-        path = tmp_path / f"{dag_id}.py"
-        path.write_text("airflow DAG")
-        _process_file(path)
+        session.add(
+            ParseImportError(
+                filename=f"/{dag_id}.py", bundle_name="dag_maker", stacktrace="Some Error\nTraceback:\n"
+            )
+        )
+    session.commit()
 
 
 @pytest.fixture
-def broken_dags_with_read_perm(tmp_path, working_dags_with_read_perm):
-    for dag_id in TEST_FILTER_DAG_IDS:
-        path = tmp_path / f"{dag_id}.py"
-        path.write_text("airflow DAG")
-        _process_file(path)
-
-
-@pytest.fixture
-def broken_dags_after_working(tmp_path):
+def _broken_dags_after_working(dag_maker, session):
     # First create and process a DAG file that works
-    path = tmp_path / "all_in_one.py"
-    contents = "from airflow import DAG\n"
-    for i, dag_id in enumerate(TEST_FILTER_DAG_IDS):
-        contents += f"dag{i} = DAG('{dag_id}', schedule=None)\n"
-    path.write_text(contents)
-    _process_file(path)
+    path = "/all_in_one.py"
+    for dag_id in TEST_FILTER_DAG_IDS:
+        with dag_maker(dag_id=dag_id, fileloc=path, session=session):
+            pass
 
-    contents += "foobar()"
-    path.write_text(contents)
-    _process_file(path)
+    # Then create an import error against that file
+    session.add(
+        ParseImportError(filename=path, bundle_name="dag_maker", stacktrace="Some Error\nTraceback:\n")
+    )
+    session.commit()
 
 
-def test_home_filter_tags(working_dags, admin_client):
+def test_home_filter_tags(_working_dags, admin_client):
     with admin_client:
         admin_client.get("home?tags=example&tags=data", follow_redirects=True)
-        assert "example,data" == flask.session[FILTER_TAGS_COOKIE]
+        assert flask.session[FILTER_TAGS_COOKIE] == "example,data"
 
         admin_client.get("home?reset_tags", follow_redirects=True)
         assert flask.session[FILTER_TAGS_COOKIE] is None
 
 
-def test_home_importerrors(broken_dags, user_client):
+@pytest.mark.usefixtures("_broken_dags", "_working_dags")
+def test_home_importerrors(_broken_dags, user_client):
     # Users with "can read on DAGs" gets all DAG import errors
     resp = user_client.get("home", follow_redirects=True)
     check_content_in_response("Import Errors", resp)
@@ -292,7 +281,8 @@ def test_home_importerrors(broken_dags, user_client):
         check_content_in_response(f"/{dag_id}.py", resp)
 
 
-def test_home_no_importerrors_perm(broken_dags, client_no_importerror):
+@pytest.mark.usefixtures("_broken_dags", "_working_dags")
+def test_home_no_importerrors_perm(_broken_dags, client_no_importerror):
     # Users without "can read on import errors" don't see any import errors
     resp = client_no_importerror.get("home", follow_redirects=True)
     check_content_not_in_response("Import Errors", resp)
@@ -310,7 +300,8 @@ def test_home_no_importerrors_perm(broken_dags, client_no_importerror):
         "home?lastrun=all_states",
     ],
 )
-def test_home_importerrors_filtered_singledag_user(broken_dags_with_read_perm, client_single_dag, page):
+@pytest.mark.usefixtures("_working_dags_with_read_perm", "_broken_dags")
+def test_home_importerrors_filtered_singledag_user(client_single_dag, page):
     # Users that can only see certain DAGs get a filtered list of import errors
     resp = client_single_dag.get(page, follow_redirects=True)
     check_content_in_response("Import Errors", resp)
@@ -322,7 +313,7 @@ def test_home_importerrors_filtered_singledag_user(broken_dags_with_read_perm, c
         check_content_not_in_response(f"/{dag_id}.py", resp)
 
 
-def test_home_importerrors_missing_read_on_all_dags_in_file(broken_dags_after_working, client_single_dag):
+def test_home_importerrors_missing_read_on_all_dags_in_file(_broken_dags_after_working, client_single_dag):
     # If a user doesn't have READ on all DAGs in a file, that files traceback is redacted
     resp = client_single_dag.get("home", follow_redirects=True)
     check_content_in_response("Import Errors", resp)
@@ -333,14 +324,14 @@ def test_home_importerrors_missing_read_on_all_dags_in_file(broken_dags_after_wo
     check_content_in_response("REDACTED", resp)
 
 
-def test_home_dag_list(working_dags, user_client):
+def test_home_dag_list(_working_dags, user_client):
     # Users with "can read on DAGs" gets all DAGs
     resp = user_client.get("home", follow_redirects=True)
     for dag_id in TEST_FILTER_DAG_IDS:
         check_content_in_response(f"dag_id={dag_id}", resp)
 
 
-def test_home_dag_list_filtered_singledag_user(working_dags_with_read_perm, client_single_dag):
+def test_home_dag_list_filtered_singledag_user(_working_dags_with_read_perm, client_single_dag):
     # Users that can only see certain DAGs get a filtered list
     resp = client_single_dag.get("home", follow_redirects=True)
     # They can see the first DAG
@@ -350,7 +341,7 @@ def test_home_dag_list_filtered_singledag_user(working_dags_with_read_perm, clie
         check_content_not_in_response(f"dag_id={dag_id}", resp)
 
 
-def test_home_dag_list_search(working_dags, user_client):
+def test_home_dag_list_search(_working_dags, user_client):
     resp = user_client.get("home?search=filter_test", follow_redirects=True)
     check_content_in_response("dag_id=filter_test_1", resp)
     check_content_in_response("dag_id=filter_test_2", resp)
@@ -358,7 +349,7 @@ def test_home_dag_list_search(working_dags, user_client):
     check_content_not_in_response("dag_id=a_first_dag_id_asc", resp)
 
 
-def test_home_dag_edit_permissions(capture_templates, working_dags_with_edit_perm, client_single_dag_edit):
+def test_home_dag_edit_permissions(capture_templates, _working_dags_with_edit_perm, client_single_dag_edit):
     with capture_templates() as templates:
         client_single_dag_edit.get("home", follow_redirects=True)
 
@@ -446,7 +437,7 @@ def test_dashboard_flash_messages_type(user_client):
     ],
     ids=["no_order_provided", "ascending_order_on_dag_id", "descending_order_on_dag_id"],
 )
-def test_sorting_home_view(url, lower_key, greater_key, user_client, working_dags):
+def test_sorting_home_view(url, lower_key, greater_key, user_client, _working_dags):
     resp = user_client.get(url, follow_redirects=True)
     resp_html = resp.data.decode("utf-8")
     lower_index = resp_html.find(lower_key)
@@ -454,15 +445,39 @@ def test_sorting_home_view(url, lower_key, greater_key, user_client, working_dag
     assert lower_index < greater_index
 
 
-@pytest.mark.parametrize("is_enabled, should_have_pixel", [(False, False), (True, True)])
-def test_analytics_pixel(user_client, is_enabled, should_have_pixel):
-    """
-    Test that the analytics pixel is not included when the feature is disabled
-    """
-    with mock.patch("airflow.settings.is_usage_data_collection_enabled", return_value=is_enabled):
-        resp = user_client.get("home", follow_redirects=True)
+@pytest.mark.parametrize(
+    "url, filter_tags_cookie_val, filter_lastrun_cookie_val, expected_filter_tags, expected_filter_lastrun",
+    [
+        ("home", None, None, [], None),
+        # from url only
+        ("home?tags=example&tags=test", None, None, ["example", "test"], None),
+        ("home?lastrun=running", None, None, [], "running"),
+        ("home?tags=example&tags=test&lastrun=running", None, None, ["example", "test"], "running"),
+        # from cookie only
+        ("home", "example,test", None, ["example", "test"], None),
+        ("home", None, "running", [], "running"),
+        ("home", "example,test", "running", ["example", "test"], "running"),
+        # from url and cookie
+        ("home?tags=example", "example,test", None, ["example"], None),
+        ("home?lastrun=failed", None, "running", [], "failed"),
+        ("home?tags=example", None, "running", ["example"], "running"),
+        ("home?lastrun=running", "example,test", None, ["example", "test"], "running"),
+        ("home?tags=example&lastrun=running", "example,test", "failed", ["example"], "running"),
+    ],
+)
+def test_filter_cookie_eval(
+    _working_dags,
+    admin_client,
+    url,
+    filter_tags_cookie_val,
+    filter_lastrun_cookie_val,
+    expected_filter_tags,
+    expected_filter_lastrun,
+):
+    with admin_client.session_transaction() as flask_session:
+        flask_session[FILTER_TAGS_COOKIE] = filter_tags_cookie_val
+        flask_session[FILTER_LASTRUN_COOKIE] = filter_lastrun_cookie_val
 
-    if should_have_pixel:
-        check_content_in_response("apacheairflow.gateway.scarf.sh", resp)
-    else:
-        check_content_not_in_response("apacheairflow.gateway.scarf.sh", resp)
+    resp = admin_client.get(url, follow_redirects=True)
+    assert resp.request.args.getlist("tags") == expected_filter_tags
+    assert resp.request.args.get("lastrun") == expected_filter_lastrun

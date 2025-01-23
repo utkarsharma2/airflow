@@ -16,51 +16,44 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-
+import { ChakraProvider, defaultSystem } from "@chakra-ui/react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import axios, { type AxiosError } from "axios";
+import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { ChakraProvider } from "@chakra-ui/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { App } from "src/app.tsx";
-import axios, { AxiosResponse } from "axios";
-import theme from "./theme";
+import { RouterProvider } from "react-router-dom";
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      refetchOnWindowFocus: false,
-      retry: 1,
-      retryDelay: 500,
-      refetchOnMount: true, // Refetches stale queries, not "always"
-      staleTime: 5 * 60 * 1000, // 5 minutes
-      initialDataUpdatedAt: new Date().setMinutes(-6), // make sure initial data is already expired
-    },
-    mutations: {
-      retry: 1,
-      retryDelay: 500,
-    },
-  },
-});
+import { ColorModeProvider } from "src/context/colorMode";
+import { TimezoneProvider } from "src/context/timezone";
+import { router } from "src/router";
+
+import { queryClient } from "./queryClient";
 
 // redirect to login page if the API responds with unauthorized or forbidden errors
 axios.interceptors.response.use(
-  (response: AxiosResponse) => response,
-  (error) => {
-    if (
-      (error.response.status === 403 || error.response.status === 401) &&
-      error.config.url.startsWith("/api/v1/")
-    ) {
+  (response) => response,
+  (error: AxiosError) => {
+    if (error.response?.status === 401) {
       const params = new URLSearchParams();
-      params.set("next", window.location.href);
-      window.location.replace(`/login?${params.toString()}`);
+
+      params.set("next", globalThis.location.href);
+      globalThis.location.replace(`${import.meta.env.VITE_LEGACY_API_URL}/login?${params.toString()}`);
     }
-  }
+
+    return Promise.reject(error);
+  },
 );
 
-const root = createRoot(document.getElementById("root")!);
-root.render(
-  <ChakraProvider theme={theme}>
-    <QueryClientProvider client={queryClient}>
-      <App />
-    </QueryClientProvider>
-  </ChakraProvider>
+createRoot(document.querySelector("#root") as HTMLDivElement).render(
+  <StrictMode>
+    <ChakraProvider value={defaultSystem}>
+      <ColorModeProvider>
+        <QueryClientProvider client={queryClient}>
+          <TimezoneProvider>
+            <RouterProvider router={router} />
+          </TimezoneProvider>
+        </QueryClientProvider>
+      </ColorModeProvider>
+    </ChakraProvider>
+  </StrictMode>,
 );

@@ -19,24 +19,20 @@ from __future__ import annotations
 import inspect
 
 import pytest
+from fastapi import FastAPI
 from flask import Blueprint
 from flask_appbuilder import BaseView
 
-from airflow.hooks.base import BaseHook
 from airflow.plugins_manager import AirflowPlugin
-from airflow.security import permissions
-from airflow.ti_deps.deps.base_ti_dep import BaseTIDep
 from airflow.timetables.base import Timetable
 from airflow.utils.module_loading import qualname
-from tests.test_utils.api_connexion_utils import assert_401, create_user, delete_user
-from tests.test_utils.compat import BaseOperatorLink
-from tests.test_utils.config import conf_vars
-from tests.test_utils.mock_plugins import mock_plugin_manager
 
-pytestmark = [pytest.mark.db_test, pytest.mark.skip_if_database_isolation_mode]
+from tests_common.test_utils.api_connexion_utils import assert_401, create_user, delete_user
+from tests_common.test_utils.compat import BaseOperatorLink
+from tests_common.test_utils.config import conf_vars
+from tests_common.test_utils.mock_plugins import mock_plugin_manager
 
-
-class PluginHook(BaseHook): ...
+pytestmark = pytest.mark.db_test
 
 
 def plugin_macro(): ...
@@ -51,6 +47,10 @@ class MockOperatorLink(BaseOperatorLink):
 
 bp = Blueprint("mock_blueprint", __name__, url_prefix="/mock_blueprint")
 
+app = FastAPI()
+
+app_with_metadata = {"app": app, "url_prefix": "/some_prefix", "name": "App name"}
+
 
 class MockView(BaseView): ...
 
@@ -61,13 +61,6 @@ appbuilder_menu_items = {
     "name": "mock_plugin",
     "href": "https://example.com",
 }
-
-
-class CustomTIDep(BaseTIDep):
-    pass
-
-
-ti_dep = CustomTIDep()
 
 
 class CustomTimetable(Timetable):
@@ -90,13 +83,12 @@ class MyCustomListener:
 class MockPlugin(AirflowPlugin):
     name = "mock_plugin"
     flask_blueprints = [bp]
+    fastapi_apps = [app_with_metadata]
     appbuilder_views = [{"view": mockview}]
     appbuilder_menu_items = [appbuilder_menu_items]
     global_operator_extra_links = [MockOperatorLink()]
     operator_extra_links = [MockOperatorLink()]
-    hooks = [PluginHook]
     macros = [plugin_macro]
-    ti_deps = [ti_dep]
     timetables = [CustomTimetable]
     listeners = [pytest, MyCustomListener()]  # using pytest here because we need a module(just for test)
 
@@ -105,17 +97,16 @@ class MockPlugin(AirflowPlugin):
 def configured_app(minimal_app_for_api):
     app = minimal_app_for_api
     create_user(
-        app,  # type: ignore
+        app,
         username="test",
-        role_name="Test",
-        permissions=[(permissions.ACTION_CAN_READ, permissions.RESOURCE_PLUGIN)],
+        role_name="admin",
     )
-    create_user(app, username="test_no_permissions", role_name="TestNoPermissions")  # type: ignore
+    create_user(app, username="test_no_permissions", role_name=None)
 
     yield app
 
-    delete_user(app, username="test")  # type: ignore
-    delete_user(app, username="test_no_permissions")  # type: ignore
+    delete_user(app, username="test")
+    delete_user(app, username="test_no_permissions")
 
 
 class TestPluginsEndpoint:
@@ -140,18 +131,22 @@ class TestGetPlugins(TestPluginsEndpoint):
                 {
                     "appbuilder_menu_items": [appbuilder_menu_items],
                     "appbuilder_views": [{"view": qualname(MockView)}],
-                    "executors": [],
                     "flask_blueprints": [
                         f"<{qualname(bp.__class__)}: name={bp.name!r} import_name={bp.import_name!r}>"
                     ],
+                    "fastapi_apps": [
+                        {
+                            "app": "fastapi.applications.FastAPI",
+                            "name": "App name",
+                            "url_prefix": "/some_prefix",
+                        }
+                    ],
                     "global_operator_extra_links": [f"<{qualname(MockOperatorLink().__class__)} object>"],
-                    "hooks": [qualname(PluginHook)],
                     "macros": [qualname(plugin_macro)],
                     "operator_extra_links": [f"<{qualname(MockOperatorLink().__class__)} object>"],
                     "source": None,
                     "name": "test_plugin",
                     "timetables": [qualname(CustomTimetable)],
-                    "ti_deps": [str(ti_dep)],
                     "listeners": [
                         d.__name__ if inspect.ismodule(d) else qualname(d)
                         for d in [pytest, MyCustomListener()]

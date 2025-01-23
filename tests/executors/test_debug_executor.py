@@ -50,7 +50,7 @@ class TestDebugExecutor:
         succeeded = executor._run_task(task_instance_mock)
 
         assert succeeded
-        task_instance_mock.run.assert_called_once_with(job_id=job_id)
+        task_instance_mock.run.assert_called()
 
     def test_queue_task_instance(self):
         key = "ti_key"
@@ -118,9 +118,6 @@ class TestDebugExecutor:
 
     def test_reschedule_mode(self):
         assert DebugExecutor.change_sensor_mode_to_reschedule
-
-    def test_is_single_threaded(self):
-        assert DebugExecutor.is_single_threaded
 
     def test_is_production_default_value(self):
         assert not DebugExecutor.is_production

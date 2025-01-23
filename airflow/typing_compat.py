@@ -22,15 +22,12 @@ from __future__ import annotations
 __all__ = [
     "Literal",
     "ParamSpec",
-    "Protocol",
     "Self",
-    "TypedDict",
+    "TypeAlias",
     "TypeGuard",
-    "runtime_checkable",
 ]
 
 import sys
-from typing import Protocol, TypedDict, runtime_checkable
 
 # Literal from typing module has various issues in different Python versions, see:
 # - https://typing-extensions.readthedocs.io/en/latest/#Literal
@@ -43,9 +40,9 @@ else:
     from typing_extensions import Literal  # type: ignore[assignment]
 
 if sys.version_info >= (3, 10):
-    from typing import ParamSpec, TypeGuard
+    from typing import ParamSpec, TypeAlias, TypeGuard
 else:
-    from typing_extensions import ParamSpec, TypeGuard
+    from typing_extensions import ParamSpec, TypeAlias, TypeGuard
 
 if sys.version_info >= (3, 11):
     from typing import Self

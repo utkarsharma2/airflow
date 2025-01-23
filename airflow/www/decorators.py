@@ -29,10 +29,10 @@ import pendulum
 from flask import after_this_request, request
 from pendulum.parsing.exceptions import ParserError
 
+from airflow.api_fastapi.app import get_auth_manager
 from airflow.models import Log
 from airflow.utils.log import secrets_masker
 from airflow.utils.session import create_session
-from airflow.www.extensions.init_auth_manager import get_auth_manager
 
 T = TypeVar("T", bound=Callable)
 
@@ -95,7 +95,7 @@ def action_logging(func: T | None = None, event: str | None = None) -> T | Calla
                     user_display = get_auth_manager().get_user_display_name()
 
                 isAPIRequest = request.blueprint == "/api/v1"
-                hasJsonBody = request.headers.get("content-type") == "application/json" and request.json
+                hasJsonBody = "application/json" in request.headers.get("content-type", "") and request.json
 
                 fields_skip_logging = {
                     "csrf_token",
@@ -105,7 +105,7 @@ def action_logging(func: T | None = None, event: str | None = None) -> T | Calla
                     "task_id",
                     "dag_run_id",
                     "run_id",
-                    "execution_date",
+                    "logical_date",
                 }
                 extra_fields = {
                     k: secrets_masker.redact(v, k)
@@ -145,13 +145,13 @@ def action_logging(func: T | None = None, event: str | None = None) -> T | Calla
                     run_id=params.get("run_id") or params.get("dag_run_id"),
                 )
 
-                if "execution_date" in request.values:
-                    execution_date_value = request.values.get("execution_date")
+                if "logical_date" in request.values:
+                    logical_date_value = request.values.get("logical_date")
                     try:
-                        log.execution_date = pendulum.parse(execution_date_value, strict=False)
+                        log.logical_date = pendulum.parse(logical_date_value, strict=False)
                     except ParserError:
                         logger.exception(
-                            "Failed to parse execution_date from the request: %s", execution_date_value
+                            "Failed to parse logical_date from the request: %s", logical_date_value
                         )
 
                 session.add(log)

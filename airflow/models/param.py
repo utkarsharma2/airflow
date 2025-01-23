@@ -20,18 +20,17 @@ import contextlib
 import copy
 import json
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar, ItemsView, Iterable, MutableMapping, ValuesView
+from collections.abc import ItemsView, Iterable, MutableMapping, ValuesView
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from airflow.exceptions import AirflowException, ParamValidationError
-from airflow.utils.mixins import ResolveMixin
+from airflow.sdk.definitions._internal.mixins import ResolveMixin
 from airflow.utils.types import NOTSET, ArgNotSet
 
 if TYPE_CHECKING:
-    from airflow.models.dag import DAG
-    from airflow.models.dagrun import DagRun
-    from airflow.models.operator import Operator
-    from airflow.serialization.pydantic.dag_run import DagRunPydantic
-    from airflow.utils.context import Context
+    from airflow.sdk.definitions.context import Context
+    from airflow.sdk.definitions.dag import DAG
+    from airflow.sdk.types import Operator
 
 logger = logging.getLogger(__name__)
 
@@ -290,6 +289,7 @@ class DagParam(ResolveMixin):
             current_dag.params[name] = default
         self._name = name
         self._default = default
+        self.current_dag = current_dag
 
     def iter_references(self) -> Iterable[tuple[Operator, str]]:
         return ()
@@ -297,30 +297,57 @@ class DagParam(ResolveMixin):
     def resolve(self, context: Context, *, include_xcom: bool = True) -> Any:
         """Pull DagParam value from DagRun context. This method is run during ``op.execute()``."""
         with contextlib.suppress(KeyError):
-            return context["dag_run"].conf[self._name]
+            if context["dag_run"].conf:
+                return context["dag_run"].conf[self._name]
         if self._default is not NOTSET:
             return self._default
         with contextlib.suppress(KeyError):
             return context["params"][self._name]
         raise AirflowException(f"No value could be resolved for parameter {self._name}")
 
+    def serialize(self) -> dict:
+        """Serialize the DagParam object into a dictionary."""
+        return {
+            "dag_id": self.current_dag.dag_id,
+            "name": self._name,
+            "default": self._default,
+        }
+
+    @classmethod
+    def deserialize(cls, data: dict, dags: dict) -> DagParam:
+        """
+        Deserializes the dictionary back into a DagParam object.
+
+        :param data: The serialized representation of the DagParam.
+        :param dags: A dictionary of available DAGs to look up the DAG.
+        """
+        dag_id = data["dag_id"]
+        # Retrieve the current DAG from the provided DAGs dictionary
+        current_dag = dags.get(dag_id)
+        if not current_dag:
+            raise ValueError(f"DAG with id {dag_id} not found.")
+
+        return cls(current_dag=current_dag, name=data["name"], default=data["default"])
+
 
 def process_params(
     dag: DAG,
     task: Operator,
-    dag_run: DagRun | DagRunPydantic | None,
+    dagrun_conf: dict[str, Any] | None,
     *,
     suppress_exception: bool,
 ) -> dict[str, Any]:
     """Merge, validate params, and convert them into a simple dict."""
     from airflow.configuration import conf
 
+    dagrun_conf = dagrun_conf or {}
+
     params = ParamsDict(suppress_exception=suppress_exception)
     with contextlib.suppress(AttributeError):
         params.update(dag.params)
     if task.params:
         params.update(task.params)
-    if conf.getboolean("core", "dag_run_conf_overrides_params") and dag_run and dag_run.conf:
-        logger.debug("Updating task params (%s) with DagRun.conf (%s)", params, dag_run.conf)
-        params.update(dag_run.conf)
+    if conf.getboolean("core", "dag_run_conf_overrides_params") and dagrun_conf:
+        logger.debug("Updating task params (%s) with DagRun.conf (%s)", params, dagrun_conf)
+        params.update(dagrun_conf)
     return params.validate()

@@ -20,9 +20,8 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
-from airflow.typing_compat import Protocol
 from airflow.utils.log.logging_mixin import LoggingMixin
 
 if TYPE_CHECKING:
@@ -67,15 +66,16 @@ class BaseHook(LoggingMixin):
         return conn
 
     @classmethod
-    def get_hook(cls, conn_id: str) -> BaseHook:
+    def get_hook(cls, conn_id: str, hook_params: dict | None = None) -> BaseHook:
         """
         Return default hook for this connection id.
 
         :param conn_id: connection id
+        :param hook_params: hook parameters
         :return: default hook for this connection
         """
         connection = cls.get_connection(conn_id)
-        return connection.get_hook()
+        return connection.get_hook(hook_params=hook_params)
 
     def get_conn(self) -> Any:
         """Return connection for the hook."""

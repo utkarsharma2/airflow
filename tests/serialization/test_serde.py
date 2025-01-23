@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import datetime
 import enum
-import warnings
 from collections import namedtuple
 from dataclasses import dataclass
 from importlib import import_module
@@ -28,7 +27,7 @@ import attr
 import pytest
 from pydantic import BaseModel
 
-from airflow.datasets import Dataset
+from airflow.sdk.definitions.asset import Asset
 from airflow.serialization.serde import (
     CLASSNAME,
     DATA,
@@ -43,7 +42,8 @@ from airflow.serialization.serde import (
     serialize,
 )
 from airflow.utils.module_loading import import_string, iter_namespace, qualname
-from tests.test_utils.config import conf_vars
+
+from tests_common.test_utils.config import conf_vars
 
 
 @pytest.fixture
@@ -336,7 +336,7 @@ class TestSerDe:
         """
         uri = "s3://does/not/exist"
         data = {
-            "__type": "airflow.datasets.Dataset",
+            "__type": "airflow.sdk.definitions.asset.Asset",
             "__source": None,
             "__var": {
                 "__var": {
@@ -349,9 +349,9 @@ class TestSerDe:
                 "__type": "dict",
             },
         }
-        dataset = deserialize(data)
-        assert dataset.extra == {"hi": "bye"}
-        assert dataset.uri == uri
+        asset = deserialize(data)
+        assert asset.extra == {"hi": "bye"}
+        assert asset.uri == uri
 
     def test_backwards_compat_wrapped(self):
         """
@@ -363,10 +363,10 @@ class TestSerDe:
         e = deserialize(i)
         assert e["extra"] == {"hi": "bye"}
 
-    def test_encode_dataset(self):
-        dataset = Dataset("mytest://dataset")
-        obj = deserialize(serialize(dataset))
-        assert dataset.uri == obj.uri
+    def test_encode_asset(self):
+        asset = Asset(uri="mytest://asset", name="test")
+        obj = deserialize(serialize(asset))
+        assert asset.uri == obj.uri
 
     def test_serializers_importable_and_str(self):
         """test if all distributed serializers are lazy loading and can be imported"""
@@ -436,15 +436,6 @@ class TestSerDe:
         i = T(y=Y(10), u=(1, 2), x=10, w=W(11))
         e = serialize(i)
         s = deserialize(e)
-        assert i == s
-
-    def test_pydantic(self):
-        pydantic = pytest.importorskip("pydantic", minversion="2.0.0")
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", category=pydantic.warnings.PydanticDeprecationWarning)
-            i = U(x=10, v=V(W(10), ["l1", "l2"], (1, 2), 10), u=(1, 2))
-            e = serialize(i)
-            s = deserialize(e)
         assert i == s
 
     def test_error_when_serializing_callable_without_name(self):

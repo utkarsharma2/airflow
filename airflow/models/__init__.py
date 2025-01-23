@@ -30,7 +30,6 @@ __all__ = [
     "DagBag",
     "DagWarning",
     "DagModel",
-    "DagPickle",
     "DagRun",
     "DagTag",
     "DbCallbackRequest",
@@ -41,8 +40,6 @@ __all__ = [
     "Pool",
     "RenderedTaskInstanceFields",
     "SkipMixin",
-    "SlaMiss",
-    "TaskFail",
     "TaskInstance",
     "TaskReschedule",
     "Trigger",
@@ -51,7 +48,6 @@ __all__ = [
     "clear_task_instances",
 ]
 
-
 from typing import TYPE_CHECKING
 
 
@@ -59,13 +55,16 @@ def import_all_models():
     for name in __lazy_imports:
         __getattr__(name)
 
+    import airflow.models.asset
+    import airflow.models.backfill
+    import airflow.models.dag_version
+    import airflow.models.dagbundle
     import airflow.models.dagwarning
-    import airflow.models.dataset
+    import airflow.models.deadline
     import airflow.models.errors
     import airflow.models.serialized_dag
     import airflow.models.taskinstancehistory
     import airflow.models.tasklog
-    import airflow.providers.fab.auth_manager.models
 
 
 def __getattr__(name):
@@ -84,6 +83,7 @@ def __getattr__(name):
 
 
 __lazy_imports = {
+    "Job": "airflow.jobs.job",
     "DAG": "airflow.models.dag",
     "ID_LEN": "airflow.models.base",
     "Base": "airflow.models.base",
@@ -92,7 +92,6 @@ __lazy_imports = {
     "Connection": "airflow.models.connection",
     "DagBag": "airflow.models.dagbag",
     "DagModel": "airflow.models.dag",
-    "DagPickle": "airflow.models.dagpickle",
     "DagRun": "airflow.models.dagrun",
     "DagTag": "airflow.models.dag",
     "DagWarning": "airflow.models.dagwarning",
@@ -104,8 +103,6 @@ __lazy_imports = {
     "Pool": "airflow.models.pool",
     "RenderedTaskInstanceFields": "airflow.models.renderedtifields",
     "SkipMixin": "airflow.models.skipmixin",
-    "SlaMiss": "airflow.models.slamiss",
-    "TaskFail": "airflow.models.taskfail",
     "TaskInstance": "airflow.models.taskinstance",
     "TaskReschedule": "airflow.models.taskreschedule",
     "Trigger": "airflow.models.trigger",
@@ -117,16 +114,17 @@ __lazy_imports = {
 if TYPE_CHECKING:
     # I was unable to get mypy to respect a airflow/models/__init__.pyi, so
     # having to resort back to this hacky method
+    from airflow.jobs.job import Job
     from airflow.models.base import ID_LEN, Base
     from airflow.models.baseoperator import BaseOperator
     from airflow.models.baseoperatorlink import BaseOperatorLink
     from airflow.models.connection import Connection
     from airflow.models.dag import DAG, DagModel, DagTag
     from airflow.models.dagbag import DagBag
-    from airflow.models.dagpickle import DagPickle
     from airflow.models.dagrun import DagRun
     from airflow.models.dagwarning import DagWarning
     from airflow.models.db_callback_request import DbCallbackRequest
+    from airflow.models.deadline import Deadline
     from airflow.models.log import Log
     from airflow.models.mappedoperator import MappedOperator
     from airflow.models.operator import Operator
@@ -134,8 +132,6 @@ if TYPE_CHECKING:
     from airflow.models.pool import Pool
     from airflow.models.renderedtifields import RenderedTaskInstanceFields
     from airflow.models.skipmixin import SkipMixin
-    from airflow.models.slamiss import SlaMiss
-    from airflow.models.taskfail import TaskFail
     from airflow.models.taskinstance import TaskInstance, clear_task_instances
     from airflow.models.taskinstancehistory import TaskInstanceHistory
     from airflow.models.taskreschedule import TaskReschedule

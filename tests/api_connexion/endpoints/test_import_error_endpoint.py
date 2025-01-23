@@ -21,61 +21,34 @@ from datetime import timedelta
 import pytest
 
 from airflow.api_connexion.exceptions import EXCEPTIONS_LINK_MAP
-from airflow.models.dag import DagModel
-from airflow.security import permissions
 from airflow.utils import timezone
 from airflow.utils.session import provide_session
-from tests.test_utils.api_connexion_utils import assert_401, create_user, delete_user
-from tests.test_utils.compat import ParseImportError
-from tests.test_utils.config import conf_vars
-from tests.test_utils.db import clear_db_dags, clear_db_import_errors
-from tests.test_utils.permissions import _resource_name
 
-pytestmark = [pytest.mark.db_test, pytest.mark.skip_if_database_isolation_mode]
+from tests_common.test_utils.api_connexion_utils import assert_401, create_user, delete_user
+from tests_common.test_utils.compat import ParseImportError
+from tests_common.test_utils.config import conf_vars
+from tests_common.test_utils.db import clear_db_dags, clear_db_import_errors
+
+pytestmark = pytest.mark.db_test
 
 TEST_DAG_IDS = ["test_dag", "test_dag2"]
+BUNDLE_NAME = "dag_maker"
 
 
 @pytest.fixture(scope="module")
 def configured_app(minimal_app_for_api):
     app = minimal_app_for_api
     create_user(
-        app,  # type:ignore
+        app,
         username="test",
-        role_name="Test",
-        permissions=[
-            (permissions.ACTION_CAN_READ, permissions.RESOURCE_DAG),
-            (permissions.ACTION_CAN_READ, permissions.RESOURCE_IMPORT_ERROR),
-        ],  # type: ignore
+        role_name="admin",
     )
-    create_user(app, username="test_no_permissions", role_name="TestNoPermissions")  # type: ignore
-    create_user(
-        app,  # type:ignore
-        username="test_single_dag",
-        role_name="TestSingleDAG",
-        permissions=[(permissions.ACTION_CAN_READ, permissions.RESOURCE_IMPORT_ERROR)],  # type: ignore
-    )
-    # For some reason, DAG level permissions are not synced when in the above list of perms,
-    # so do it manually here:
-    app.appbuilder.sm.bulk_sync_roles(
-        [
-            {
-                "role": "TestSingleDAG",
-                "perms": [
-                    (
-                        permissions.ACTION_CAN_READ,
-                        _resource_name(TEST_DAG_IDS[0], permissions.RESOURCE_DAG),
-                    )
-                ],
-            }
-        ]
-    )
+    create_user(app, username="test_no_permissions", role_name=None)
 
     yield app
 
-    delete_user(app, username="test")  # type: ignore
-    delete_user(app, username="test_no_permissions")  # type: ignore
-    delete_user(app, username="test_single_dag")  # type: ignore
+    delete_user(app, username="test")
+    delete_user(app, username="test_no_permissions")
 
 
 class TestBaseImportError:
@@ -105,6 +78,7 @@ class TestGetImportErrorEndpoint(TestBaseImportError):
             filename="Lorem_ipsum.py",
             stacktrace="Lorem ipsum",
             timestamp=timezone.parse(self.timestamp, timezone="UTC"),
+            bundle_name=BUNDLE_NAME,
         )
         session.add(import_error)
         session.commit()
@@ -116,28 +90,30 @@ class TestGetImportErrorEndpoint(TestBaseImportError):
         assert response.status_code == 200
         response_data = response.json
         response_data["import_error_id"] = 1
-        assert {
+        assert response_data == {
             "filename": "Lorem_ipsum.py",
+            "bundle_name": BUNDLE_NAME,
             "import_error_id": 1,
             "stack_trace": "Lorem ipsum",
             "timestamp": "2020-06-10T12:00:00+00:00",
-        } == response_data
+        }
 
     def test_response_404(self):
         response = self.client.get("/api/v1/importErrors/2", environ_overrides={"REMOTE_USER": "test"})
         assert response.status_code == 404
-        assert {
+        assert response.json == {
             "detail": "The ImportError with import_error_id: `2` was not found",
             "status": 404,
             "title": "Import error not found",
             "type": EXCEPTIONS_LINK_MAP[404],
-        } == response.json
+        }
 
     def test_should_raises_401_unauthenticated(self, session):
         import_error = ParseImportError(
             filename="Lorem_ipsum.py",
             stacktrace="Lorem ipsum",
             timestamp=timezone.parse(self.timestamp, timezone="UTC"),
+            bundle_name=BUNDLE_NAME,
         )
         session.add(import_error)
         session.commit()
@@ -152,72 +128,6 @@ class TestGetImportErrorEndpoint(TestBaseImportError):
         )
         assert response.status_code == 403
 
-    def test_should_raise_403_forbidden_without_dag_read(self, session):
-        import_error = ParseImportError(
-            filename="Lorem_ipsum.py",
-            stacktrace="Lorem ipsum",
-            timestamp=timezone.parse(self.timestamp, timezone="UTC"),
-        )
-        session.add(import_error)
-        session.commit()
-
-        response = self.client.get(
-            f"/api/v1/importErrors/{import_error.id}", environ_overrides={"REMOTE_USER": "test_single_dag"}
-        )
-
-        assert response.status_code == 403
-
-    def test_should_return_200_with_single_dag_read(self, session):
-        dag_model = DagModel(dag_id=TEST_DAG_IDS[0], fileloc="Lorem_ipsum.py")
-        session.add(dag_model)
-        import_error = ParseImportError(
-            filename="Lorem_ipsum.py",
-            stacktrace="Lorem ipsum",
-            timestamp=timezone.parse(self.timestamp, timezone="UTC"),
-        )
-        session.add(import_error)
-        session.commit()
-
-        response = self.client.get(
-            f"/api/v1/importErrors/{import_error.id}", environ_overrides={"REMOTE_USER": "test_single_dag"}
-        )
-
-        assert response.status_code == 200
-        response_data = response.json
-        response_data["import_error_id"] = 1
-        assert {
-            "filename": "Lorem_ipsum.py",
-            "import_error_id": 1,
-            "stack_trace": "Lorem ipsum",
-            "timestamp": "2020-06-10T12:00:00+00:00",
-        } == response_data
-
-    def test_should_return_200_redacted_with_single_dag_read_in_dagfile(self, session):
-        for dag_id in TEST_DAG_IDS:
-            dag_model = DagModel(dag_id=dag_id, fileloc="Lorem_ipsum.py")
-            session.add(dag_model)
-        import_error = ParseImportError(
-            filename="Lorem_ipsum.py",
-            stacktrace="Lorem ipsum",
-            timestamp=timezone.parse(self.timestamp, timezone="UTC"),
-        )
-        session.add(import_error)
-        session.commit()
-
-        response = self.client.get(
-            f"/api/v1/importErrors/{import_error.id}", environ_overrides={"REMOTE_USER": "test_single_dag"}
-        )
-
-        assert response.status_code == 200
-        response_data = response.json
-        response_data["import_error_id"] = 1
-        assert {
-            "filename": "Lorem_ipsum.py",
-            "import_error_id": 1,
-            "stack_trace": "REDACTED - you do not have read permission on all DAGs in the file",
-            "timestamp": "2020-06-10T12:00:00+00:00",
-        } == response_data
-
 
 class TestGetImportErrorsEndpoint(TestBaseImportError):
     def test_get_import_errors(self, session):
@@ -226,6 +136,7 @@ class TestGetImportErrorsEndpoint(TestBaseImportError):
                 filename="Lorem_ipsum.py",
                 stacktrace="Lorem ipsum",
                 timestamp=timezone.parse(self.timestamp, timezone="UTC"),
+                bundle_name=BUNDLE_NAME,
             )
             for _ in range(2)
         ]
@@ -237,23 +148,25 @@ class TestGetImportErrorsEndpoint(TestBaseImportError):
         assert response.status_code == 200
         response_data = response.json
         self._normalize_import_errors(response_data["import_errors"])
-        assert {
+        assert response_data == {
             "import_errors": [
                 {
                     "filename": "Lorem_ipsum.py",
+                    "bundle_name": BUNDLE_NAME,
                     "import_error_id": 1,
                     "stack_trace": "Lorem ipsum",
                     "timestamp": "2020-06-10T12:00:00+00:00",
                 },
                 {
                     "filename": "Lorem_ipsum.py",
+                    "bundle_name": BUNDLE_NAME,
                     "import_error_id": 2,
                     "stack_trace": "Lorem ipsum",
                     "timestamp": "2020-06-10T12:00:00+00:00",
                 },
             ],
             "total_entries": 2,
-        } == response_data
+        }
 
     def test_get_import_errors_order_by(self, session):
         import_error = [
@@ -261,6 +174,7 @@ class TestGetImportErrorsEndpoint(TestBaseImportError):
                 filename=f"Lorem_ipsum{i}.py",
                 stacktrace="Lorem ipsum",
                 timestamp=timezone.parse(self.timestamp, timezone="UTC") + timedelta(days=-i),
+                bundle_name=BUNDLE_NAME,
             )
             for i in range(1, 3)
         ]
@@ -274,23 +188,25 @@ class TestGetImportErrorsEndpoint(TestBaseImportError):
         assert response.status_code == 200
         response_data = response.json
         self._normalize_import_errors(response_data["import_errors"])
-        assert {
+        assert response_data == {
             "import_errors": [
                 {
                     "filename": "Lorem_ipsum1.py",
+                    "bundle_name": BUNDLE_NAME,
                     "import_error_id": 1,  # id normalized with self._normalize_import_errors
                     "stack_trace": "Lorem ipsum",
                     "timestamp": "2020-06-09T12:00:00+00:00",
                 },
                 {
                     "filename": "Lorem_ipsum2.py",
+                    "bundle_name": BUNDLE_NAME,
                     "import_error_id": 2,
                     "stack_trace": "Lorem ipsum",
                     "timestamp": "2020-06-08T12:00:00+00:00",
                 },
             ],
             "total_entries": 2,
-        } == response_data
+        }
 
     def test_order_by_raises_400_for_invalid_attr(self, session):
         import_error = [
@@ -298,6 +214,7 @@ class TestGetImportErrorsEndpoint(TestBaseImportError):
                 filename="Lorem_ipsum.py",
                 stacktrace="Lorem ipsum",
                 timestamp=timezone.parse(self.timestamp, timezone="UTC"),
+                bundle_name=BUNDLE_NAME,
             )
             for _ in range(2)
         ]
@@ -318,6 +235,7 @@ class TestGetImportErrorsEndpoint(TestBaseImportError):
                 filename="Lorem_ipsum.py",
                 stacktrace="Lorem ipsum",
                 timestamp=timezone.parse(self.timestamp, timezone="UTC"),
+                bundle_name=BUNDLE_NAME,
             )
             for _ in range(2)
         ]
@@ -327,71 +245,6 @@ class TestGetImportErrorsEndpoint(TestBaseImportError):
         response = self.client.get("/api/v1/importErrors")
 
         assert_401(response)
-
-    def test_get_import_errors_single_dag(self, session):
-        for dag_id in TEST_DAG_IDS:
-            fake_filename = f"/tmp/{dag_id}.py"
-            dag_model = DagModel(dag_id=dag_id, fileloc=fake_filename)
-            session.add(dag_model)
-            importerror = ParseImportError(
-                filename=fake_filename,
-                stacktrace="Lorem ipsum",
-                timestamp=timezone.parse(self.timestamp, timezone="UTC"),
-            )
-            session.add(importerror)
-        session.commit()
-
-        response = self.client.get(
-            "/api/v1/importErrors", environ_overrides={"REMOTE_USER": "test_single_dag"}
-        )
-
-        assert response.status_code == 200
-        response_data = response.json
-        self._normalize_import_errors(response_data["import_errors"])
-        assert {
-            "import_errors": [
-                {
-                    "filename": "/tmp/test_dag.py",
-                    "import_error_id": 1,
-                    "stack_trace": "Lorem ipsum",
-                    "timestamp": "2020-06-10T12:00:00+00:00",
-                },
-            ],
-            "total_entries": 1,
-        } == response_data
-
-    def test_get_import_errors_single_dag_in_dagfile(self, session):
-        for dag_id in TEST_DAG_IDS:
-            fake_filename = "/tmp/all_in_one.py"
-            dag_model = DagModel(dag_id=dag_id, fileloc=fake_filename)
-            session.add(dag_model)
-
-        importerror = ParseImportError(
-            filename="/tmp/all_in_one.py",
-            stacktrace="Lorem ipsum",
-            timestamp=timezone.parse(self.timestamp, timezone="UTC"),
-        )
-        session.add(importerror)
-        session.commit()
-
-        response = self.client.get(
-            "/api/v1/importErrors", environ_overrides={"REMOTE_USER": "test_single_dag"}
-        )
-
-        assert response.status_code == 200
-        response_data = response.json
-        self._normalize_import_errors(response_data["import_errors"])
-        assert {
-            "import_errors": [
-                {
-                    "filename": "/tmp/all_in_one.py",
-                    "import_error_id": 1,
-                    "stack_trace": "REDACTED - you do not have read permission on all DAGs in the file",
-                    "timestamp": "2020-06-10T12:00:00+00:00",
-                },
-            ],
-            "total_entries": 1,
-        } == response_data
 
 
 class TestGetImportErrorsEndpointPagination(TestBaseImportError):
@@ -415,6 +268,7 @@ class TestGetImportErrorsEndpointPagination(TestBaseImportError):
                 filename=f"/tmp/file_{i}.py",
                 stacktrace="Lorem ipsum",
                 timestamp=timezone.parse(self.timestamp, timezone="UTC"),
+                bundle_name=BUNDLE_NAME,
             )
             for i in range(1, 110)
         ]
@@ -433,6 +287,7 @@ class TestGetImportErrorsEndpointPagination(TestBaseImportError):
                 filename=f"/tmp/file_{i}.py",
                 stacktrace="Lorem ipsum",
                 timestamp=timezone.parse(self.timestamp, timezone="UTC"),
+                bundle_name=BUNDLE_NAME,
             )
             for i in range(1, 110)
         ]
@@ -447,6 +302,7 @@ class TestGetImportErrorsEndpointPagination(TestBaseImportError):
         import_errors = [
             ParseImportError(
                 filename=f"/tmp/file_{i}.py",
+                bundle_name=BUNDLE_NAME,
                 stacktrace="Lorem ipsum",
                 timestamp=timezone.parse(self.timestamp, timezone="UTC"),
             )

@@ -28,7 +28,6 @@ It's recommended that you first review the pages in :doc:`core concepts </core-c
 
     plugins
     deferring
-    dagfile-processing
     serializers
     connections
     dynamic-task-mapping
@@ -41,5 +40,5 @@ It's recommended that you first review the pages in :doc:`core concepts </core-c
 
     cron
     timezone
-    datasets
+    Assets <datasets>
     timetable

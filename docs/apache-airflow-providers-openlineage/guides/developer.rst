@@ -63,16 +63,13 @@ OpenLineage defines a few methods for implementation in Operators. Those are ref
 
 .. code-block:: python
 
-  def get_openlineage_facets_on_start() -> OperatorLineage:
-      ...
+  def get_openlineage_facets_on_start() -> OperatorLineage: ...
 
 
-  def get_openlineage_facets_on_complete(ti: TaskInstance) -> OperatorLineage:
-      ...
+  def get_openlineage_facets_on_complete(ti: TaskInstance) -> OperatorLineage: ...
 
 
-  def get_openlineage_facets_on_failure(ti: TaskInstance) -> OperatorLineage:
-      ...
+  def get_openlineage_facets_on_failure(ti: TaskInstance) -> OperatorLineage: ...
 
 OpenLineage methods get called respectively when task instance changes state to:
 
@@ -152,7 +149,7 @@ or just always the same in context of OpenLineage in Airflow, like ``producer``.
 Example
 ^^^^^^^
 
-Here's example of properly implemented ``get_openlineage_facets_on_complete`` method, for `GcsToGcsOperator <https://github.com/apache/airflow/blob/main/airflow/providers/google/cloud/transfers/gcs_to_gcs.py>`_.
+Here's example of properly implemented ``get_openlineage_facets_on_complete`` method, for `GcsToGcsOperator <https://github.com/apache/airflow/blob/main/providers/src/airflow/providers/google/cloud/transfers/gcs_to_gcs.py>`_.
 As there is some processing made in ``execute`` method, and there is no relevant failure data, implementing this single method is enough.
 
 .. code-block::  python
@@ -290,7 +287,7 @@ To learn more about how Operators and Extractors work together under the hood, c
 When testing an Extractor, we want to firstly verify if ``OperatorLineage`` object is being created,
 specifically verifying that the object is being built with the correct input and output datasets and relevant facets.
 This is done in OpenLineage via pytest, with appropriate mocking and patching for connections and objects.
-Check out `example tests <https://github.com/apache/airflow/blob/main/tests/providers/openlineage/extractors/test_base.py>`_.
+Check out `example tests <https://github.com/apache/airflow/blob/main/providers/tests/openlineage/extractors/test_base.py>`_.
 
 Testing each facet is also important, as data or graphs in the UI can render incorrectly if the facets are wrong.
 For example, if the facet name is created incorrectly in the Extractor, then the Operator's task will not show up in the lineage graph,
@@ -360,8 +357,8 @@ like extracting column level lineage and inputs/outputs from SQL query with SQL 
             return lineage_metadata
 
 For more examples of OpenLineage Extractors, check out the source code of
-`BashExtractor <https://github.com/apache/airflow/blob/main/airflow/providers/openlineage/extractors/bash.py>`_ or
-`PythonExtractor <https://github.com/apache/airflow/blob/main/airflow/providers/openlineage/extractors/python.py>`_.
+`BashExtractor <https://github.com/apache/airflow/blob/main/providers/src/airflow/providers/openlineage/extractors/bash.py>`_ or
+`PythonExtractor <https://github.com/apache/airflow/blob/main/providers/src/airflow/providers/openlineage/extractors/python.py>`_.
 
 .. _inlets_outlets:openlineage:
 
@@ -390,7 +387,7 @@ An Operator inside the Airflow DAG can be annotated with inlets and outlets like
     import pendulum
 
     from airflow import DAG
-    from airflow.operators.bash import BashOperator
+    from airflow.providers.standard.operators.bash import BashOperator
     from airflow.lineage.entities import Table, File, Column, User
 
 

@@ -17,15 +17,22 @@
 # under the License.
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from airflow.models import DagBag, Variable
 from airflow.utils import timezone
 from airflow.utils.state import State
 from airflow.utils.types import DagRunType
-from tests.test_utils.compat import AIRFLOW_V_3_0_PLUS
-from tests.test_utils.db import clear_db_runs, clear_db_variables
-from tests.test_utils.www import _check_last_log, _check_last_log_masked_variable, check_content_in_response
+
+from tests_common.test_utils.db import clear_db_runs, clear_db_variables, parse_and_sync_to_db
+from tests_common.test_utils.version_compat import AIRFLOW_V_3_0_PLUS
+from tests_common.test_utils.www import (
+    _check_last_log,
+    _check_last_log_masked_variable,
+    check_content_in_response,
+)
 
 if AIRFLOW_V_3_0_PLUS:
     from airflow.utils.types import DagRunTriggeredByType
@@ -37,8 +44,8 @@ EXAMPLE_DAG_DEFAULT_DATE = timezone.utcnow().replace(hour=0, minute=0, second=0,
 
 @pytest.fixture(scope="module")
 def dagbag():
-    DagBag(include_examples=True, read_dags_from_db=False).sync_to_db()
-    return DagBag(include_examples=True, read_dags_from_db=True)
+    parse_and_sync_to_db(os.devnull, include_examples=True)
+    return DagBag(read_dags_from_db=True)
 
 
 @pytest.fixture(scope="module")
@@ -55,8 +62,9 @@ def xcom_dag(dagbag):
 def dagruns(bash_dag, xcom_dag):
     triggered_by_kwargs = {"triggered_by": DagRunTriggeredByType.TEST} if AIRFLOW_V_3_0_PLUS else {}
     bash_dagrun = bash_dag.create_dagrun(
+        run_id="test_bash",
         run_type=DagRunType.SCHEDULED,
-        execution_date=EXAMPLE_DAG_DEFAULT_DATE,
+        logical_date=EXAMPLE_DAG_DEFAULT_DATE,
         data_interval=(EXAMPLE_DAG_DEFAULT_DATE, EXAMPLE_DAG_DEFAULT_DATE),
         start_date=timezone.utcnow(),
         state=State.RUNNING,
@@ -64,8 +72,9 @@ def dagruns(bash_dag, xcom_dag):
     )
 
     xcom_dagrun = xcom_dag.create_dagrun(
+        run_id="test_xcom",
         run_type=DagRunType.SCHEDULED,
-        execution_date=EXAMPLE_DAG_DEFAULT_DATE,
+        logical_date=EXAMPLE_DAG_DEFAULT_DATE,
         data_interval=(EXAMPLE_DAG_DEFAULT_DATE, EXAMPLE_DAG_DEFAULT_DATE),
         start_date=timezone.utcnow(),
         state=State.RUNNING,
@@ -78,7 +87,7 @@ def dagruns(bash_dag, xcom_dag):
 
 
 @pytest.fixture(autouse=True)
-def clean_db():
+def _clean_db():
     clear_db_variables()
     yield
     clear_db_variables()
@@ -94,7 +103,7 @@ def test_action_logging_robots(session, admin_client):
         session,
         event="robots",
         dag_id=None,
-        execution_date=None,
+        logical_date=None,
     )
 
 
@@ -102,7 +111,7 @@ def test_action_logging_post(session, admin_client):
     form = dict(
         task_id="runme_1",
         dag_id="example_bash_operator",
-        execution_date=EXAMPLE_DAG_DEFAULT_DATE,
+        logical_date=EXAMPLE_DAG_DEFAULT_DATE,
         upstream="false",
         downstream="false",
         future="false",
@@ -117,7 +126,7 @@ def test_action_logging_post(session, admin_client):
         session,
         dag_id="example_bash_operator",
         event="clear",
-        execution_date=EXAMPLE_DAG_DEFAULT_DATE,
+        logical_date=EXAMPLE_DAG_DEFAULT_DATE,
         expected_extra={
             "upstream": "false",
             "downstream": "false",
@@ -137,7 +146,7 @@ def test_action_logging_variables_post(session, admin_client):
     form = dict(key="random", val="random")
     admin_client.post("/variable/add", data=form)
     session.commit()
-    _check_last_log(session, dag_id=None, event="variable.create", execution_date=None)
+    _check_last_log(session, dag_id=None, event="variable.create", logical_date=None)
 
 
 @pytest.mark.enable_redact
@@ -145,4 +154,4 @@ def test_action_logging_variables_masked_secrets(session, admin_client):
     form = dict(key="x_secret", val="randomval")
     admin_client.post("/variable/add", data=form)
     session.commit()
-    _check_last_log_masked_variable(session, dag_id=None, event="variable.create", execution_date=None)
+    _check_last_log_masked_variable(session, dag_id=None, event="variable.create", logical_date=None)

@@ -256,10 +256,7 @@ important to watch DagRun activity status in time when introducing
 new ``depends_on_past=True``, unless you are planning on running a backfill
 for the new task(s).
 
-It is also important to note that the task's ``start_date``, in the context of a
-backfill CLI command, gets overridden by the backfill's ``start_date`` commands.
-This allows for a backfill on tasks that have ``depends_on_past=True`` to
-actually start. If this were not the case, the backfill just would not start.
+It is also important to note that the task's ``start_date`` is ignored in backfills.
 
 Using time zones
 ----------------
@@ -401,7 +398,7 @@ What does ``TemplateNotFound`` mean?
 -------------------------------------
 
 ``TemplateNotFound`` errors are usually due to misalignment with user expectations when passing path to operator
-that trigger Jinja templating. A common occurrence is with :ref:`BashOperators<howto/operator:BashOperator>`.
+that trigger Jinja templating. A common occurrence is with :class:`~airflow.providers.standard.operators.BashOperator`.
 
 Another commonly missed fact is that the files are resolved relative to where the pipeline file lives. You can add
 other directories to the ``template_searchpath`` of the DAG object to allow for other non-relative location.
@@ -494,7 +491,7 @@ What does "MySQL Server has gone away" mean?
 
 You may occasionally experience ``OperationalError`` with the message "MySQL Server has gone away". This is due to the
 connection pool keeping connections open too long and you are given an old connection that has expired. To ensure a
-valid connection, you can set :ref:`config:core__sql_alchemy_pool_recycle` to ensure connections are invalidated after
+valid connection, you can set :ref:`config:database__sql_alchemy_pool_recycle` to ensure connections are invalidated after
 that many seconds and new ones are created.
 
 
@@ -522,29 +519,3 @@ This means ``explicit_defaults_for_timestamp`` is disabled in your mysql server 
 
 #. Set ``explicit_defaults_for_timestamp = 1`` under the ``mysqld`` section in your ``my.cnf`` file.
 #. Restart the Mysql server.
-
-Does Airflow collect any telemetry data?
-----------------------------------------
-
-.. _usage-data-collection:
-
-Airflow integrates `Scarf <https://about.scarf.sh/>`__ to collect basic usage data during operation.
-This data assists Airflow maintainers in better understanding how Airflow is used.
-Insights gained from this data are helpful for prioritizing patches, minor releases, and
-security fixes. Additionally, this information supports key decisions related to the development road map.
-
-Deployments can opt-out of data collection by setting the :ref:`[usage_data_collection] enabled <config:usage_data_collection__enabled>`
-option to ``False``, or the ``SCARF_ANALYTICS=false`` environment variable.
-Individual users can easily opt-out of analytics in various ways documented in the
-`Scarf Do Not Track docs <https://docs.scarf.sh/gateway/#do-not-track>`__.
-
-The telemetry data collected is limited to the following:
-
-- Airflow version
-- Python version
-- Operating system & machine architecture
-- Executor
-- Metadata DB type & its version
-- Number of DAGs
-- Number of Airflow plugins
-- Number of timetables, Flask blueprints, Flask AppBuilder views, and Flask Appbuilder menu items from Airflow plugins

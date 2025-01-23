@@ -22,9 +22,10 @@ import logging
 import os
 import re
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 from subprocess import run
-from typing import Any, Callable, Iterable
+from typing import Any, Callable
 
 from hatchling.builders.config import BuilderConfig
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
@@ -49,6 +50,7 @@ PRE_INSTALLED_PROVIDERS = [
     "imap",
     "smtp",
     "sqlite",
+    "standard",
 ]
 
 # Those extras are dynamically added by hatch in the build hook to metadata optional dependencies
@@ -77,7 +79,8 @@ CORE_EXTRAS: dict[str, list[str]] = {
         "cgroupspy>=0.2.2",
     ],
     "cloudpickle": [
-        "cloudpickle",
+        # Latest version of apache-beam requires cloudpickle~=2.2.1
+        "cloudpickle>=2.2.1",
     ],
     "github-enterprise": [
         "apache-airflow[fab]",
@@ -88,7 +91,10 @@ CORE_EXTRAS: dict[str, list[str]] = {
         "authlib>=1.0.0",
     ],
     "graphviz": [
-        "graphviz>=0.12",
+        # The graphviz package creates friction when installing on MacOS as it needs graphviz system package to
+        # be installed, and it's really only used for very obscure features of Airflow, so we can skip it on MacOS
+        # Instead, if someone attempts to use it on MacOS, they will get explanatory error on how to install it
+        "graphviz>=0.12; sys_platform != 'darwin'",
     ],
     "kerberos": [
         "pykerberos>=1.1.13",
@@ -96,14 +102,16 @@ CORE_EXTRAS: dict[str, list[str]] = {
         "thrift-sasl>=0.2.0",
     ],
     "ldap": [
-        "ldap3>=2.5.1",
-        "python-ldap",
+        "python-ldap>=3.4.4",
     ],
     "leveldb": [
-        "plyvel",
+        # The plyvel package is a huge pain when installing on MacOS - especially when Apple releases new
+        # OS version. It's usually next to impossible to install it at least for a few months after the new
+        # MacOS version is released. We can skip it on MacOS as this is an optional feature anyway.
+        "plyvel>=1.5.1; sys_platform != 'darwin'",
     ],
     "otel": [
-        "opentelemetry-exporter-prometheus",
+        "opentelemetry-exporter-prometheus>=0.47b0",
     ],
     "pandas": [
         # In pandas 2.2 minimal version of the sqlalchemy is 2.0
@@ -117,16 +125,12 @@ CORE_EXTRAS: dict[str, list[str]] = {
         "flask-bcrypt>=0.7.1",
     ],
     "rabbitmq": [
-        "amqp",
+        "amqp>=5.2.0",
     ],
     "s3fs": [
         # This is required for support of S3 file system which uses aiobotocore
         # which can have a conflict with boto3 as mentioned in aiobotocore extra
         "s3fs>=2023.10.0",
-    ],
-    "saml": [
-        # This is required for support of SAML which might be used by some providers (e.g. Amazon)
-        "python3-saml>=1.16.0",
     ],
     "sentry": [
         "blinker>=1.1",
@@ -138,35 +142,24 @@ CORE_EXTRAS: dict[str, list[str]] = {
         "statsd>=3.3.0",
     ],
     "uv": [
-        "uv>=0.1.32",
-    ],
-    "virtualenv": [
-        "virtualenv",
+        "uv>=0.5.14",
     ],
 }
 
 DOC_EXTRAS: dict[str, list[str]] = {
     "doc": [
-        "astroid>=2.12.3,<3.0",
+        "astroid>=3",
         "checksumdir>=1.2.0",
-        # click 8.1.4 and 8.1.5 generate mypy errors due to typing issue in the upstream package:
-        # https://github.com/pallets/click/issues/2558
-        "click>=8.0,!=8.1.4,!=8.1.5",
-        # Docutils 0.17.0 converts generated <div class="section"> into <section> and breaks our doc formatting
-        # By adding a lot of whitespace separation. This limit can be lifted when we update our doc to handle
-        # <section> tags for sections
-        "docutils<0.17,>=0.16",
-        "sphinx-airflow-theme>=0.0.12",
+        "click>=8.1.8",
+        "docutils>=0.21",
+        "sphinx-airflow-theme>=0.1.0",
         "sphinx-argparse>=0.4.0",
-        # sphinx-autoapi fails with astroid 3.0, see: https://github.com/readthedocs/sphinx-autoapi/issues/407
-        # This was fixed in sphinx-autoapi 3.0, however it has requirement sphinx>=6.1, but we stuck on 5.x
-        "sphinx-autoapi>=2.1.1",
+        "sphinx-autoapi>=3",
         "sphinx-copybutton>=0.5.2",
         "sphinx-design>=0.5.0",
         "sphinx-jinja>=2.0.2",
         "sphinx-rtd-theme>=2.0.0",
-        # Currently we are using sphinx 5 but we need to migrate to Sphinx 7
-        "sphinx>=5.3.0,<6.0.0",
+        "sphinx>=7",
         "sphinxcontrib-applehelp>=1.0.4",
         "sphinxcontrib-devhelp>=1.0.2",
         "sphinxcontrib-htmlhelp>=2.0.1",
@@ -175,13 +168,16 @@ DOC_EXTRAS: dict[str, list[str]] = {
         "sphinxcontrib-jsmath>=1.0.1",
         "sphinxcontrib-qthelp>=1.0.3",
         "sphinxcontrib-redoc>=1.6.0",
-        "sphinxcontrib-serializinghtml==1.1.5",
+        "sphinxcontrib-serializinghtml>=1.1.5",
         "sphinxcontrib-spelling>=8.0.0",
     ],
     "doc-gen": [
         "apache-airflow[doc]",
-        "diagrams>=0.23.4",
-        "eralchemy2>=1.3.8",
+        # The graphviz package creates friction when installing on MacOS as it needs graphviz system package to
+        # be installed, and it's really only used for very obscure features of Airflow, so we can skip it on MacOS
+        # Instead, if someone attempts to use it on MacOS, they will get explanatory error on how to install it
+        "diagrams>=0.23.4; sys_platform != 'darwin'",
+        "eralchemy2>=1.3.8; sys_platform != 'darwin'",
     ],
     # END OF doc extras
 }
@@ -190,13 +186,12 @@ DEVEL_EXTRAS: dict[str, list[str]] = {
     # START OF devel extras
     "devel-debuggers": [
         "ipdb>=0.13.13",
+        "pdbr>=0.8.9",
     ],
     "devel-devscripts": [
-        "click>=8.0",
+        "click>=8.1.8",
         "gitpython>=3.1.40",
-        "hatch>=1.9.1",
-        # Incremental 24.7.0, 24.7.1 has broken `python -m virtualenv` command when run in /opt/airflow directory
-        "incremental!=24.7.0,!=24.7.1,>=22.10.0",
+        "incremental>=24.7.2",
         "pipdeptree>=2.13.1",
         "pygithub>=2.1.1",
         "restructuredtext-lint>=1.4.0",
@@ -219,44 +214,47 @@ DEVEL_EXTRAS: dict[str, list[str]] = {
         # Make sure to upgrade the mypy version in update-common-sql-api-stubs in .pre-commit-config.yaml
         # when you upgrade it here !!!!
         "mypy==1.9.0",
-        "types-Deprecated",
-        "types-Markdown",
-        "types-PyMySQL",
-        "types-PyYAML",
-        "types-aiofiles",
-        "types-certifi",
-        "types-croniter",
-        "types-docutils",
-        "types-paramiko",
-        "types-protobuf",
-        "types-python-dateutil",
-        "types-python-slugify",
-        "types-pytz",
-        "types-redis",
-        "types-requests",
-        "types-setuptools",
-        "types-tabulate",
-        "types-termcolor",
-        "types-toml",
+        "types-Deprecated>=1.2.9.20240311",
+        "types-Markdown>=3.6.0.20240316",
+        "types-PyMySQL>=1.1.0.20240425",
+        "types-PyYAML>=6.0.12.20240724",
+        "types-aiofiles>=23.2.0.20240403",
+        "types-certifi>=2021.10.8.3",
+        "types-croniter>=2.0.0.20240423",
+        "types-docutils>=0.21.0.20240704",
+        "types-paramiko>=3.4.0.20240423",
+        "types-protobuf>=5.26.0.20240422",
+        "types-python-dateutil>=2.9.0.20240316",
+        "types-python-slugify>=8.0.2.20240310",
+        "types-pytz>=2024.1.0.20240417",
+        "types-redis>=4.6.0.20240425",
+        # aiobotocore>=2.9.0 requires urllib<2. types-requests>=2.31.0.7 uses urllib>2.
+        # hence, 2.31.0.6 is required for aiobotocore>=2.9.0
+        "types-requests>=2.31.0.6",
+        "types-setuptools>=69.5.0.20240423",
+        "types-tabulate>=0.9.0.20240106",
+        "types-toml>=0.10.8.20240310",
     ],
     "devel-sentry": [
         "blinker>=1.7.0",
     ],
     "devel-static-checks": [
         "black>=23.12.0",
-        "pre-commit>=3.5.0",
-        "ruff==0.5.5",
+        "ruff==0.8.1",
         "yamllint>=1.33.0",
     ],
     "devel-tests": [
         "aiofiles>=23.2.0",
         "aioresponses>=0.7.6",
-        "backports.zoneinfo>=0.2.1;python_version<'3.9'",
         "beautifulsoup4>=4.7.1",
         # Coverage 7.4.0 added experimental support for Python 3.12 PEP669 which we use in Airflow
         "coverage>=7.4.0",
+        "deepdiff>=8.1.1",
         "jmespath>=0.7.0",
-        "pytest-asyncio>=0.23.6",
+        "kgb>=7.0.0",
+        # We need to adjust all our tests to work with "proper" handiing of the async loops in pytest-asyncio
+        # Implemented in Pytest-asyncio 0.25.1 and 0.25.2. See: https://github.com/apache/airflow/issues/45355
+        "pytest-asyncio>=0.23.6,<0.25.1",
         "pytest-cov>=4.1.0",
         "pytest-custom-exit-code>=0.3.0",
         "pytest-icdiff>=0.9",
@@ -264,6 +262,7 @@ DEVEL_EXTRAS: dict[str, list[str]] = {
         "pytest-mock>=3.12.0",
         "pytest-rerunfailures>=13.0",
         "pytest-timeouts>=1.2.1",
+        "pytest-unordered>=0.6.1",
         "pytest-xdist>=3.5.0",
         "pytest>=8.2,<9",
         "requests_mock>=1.11.0",
@@ -343,66 +342,6 @@ BUNDLE_EXTRAS: dict[str, list[str]] = {
     ],
 }
 
-DEPRECATED_EXTRAS: dict[str, list[str]] = {
-    ########################################################################################################
-    #  The whole section can be removed in Airflow 3.0 as those old aliases are deprecated in 2.* series
-    ########################################################################################################
-    "atlas": [
-        "apache-airflow[apache-atlas]",
-    ],
-    "aws": [
-        "apache-airflow[amazon]",
-    ],
-    "azure": [
-        "apache-airflow[microsoft-azure]",
-    ],
-    "cassandra": [
-        "apache-airflow[apache-cassandra]",
-    ],
-    # Empty alias extra just for backward compatibility with Airflow 1.10
-    "crypto": [],
-    "druid": [
-        "apache-airflow[apache-druid]",
-    ],
-    "gcp": [
-        "apache-airflow[google]",
-    ],
-    "gcp-api": [
-        "apache-airflow[google]",
-    ],
-    "hdfs": [
-        "apache-airflow[apache-hdfs]",
-    ],
-    "hive": [
-        "apache-airflow[apache-hive]",
-    ],
-    "kubernetes": [
-        "apache-airflow[cncf-kubernetes]",
-    ],
-    "mssql": [
-        "apache-airflow[microsoft-mssql]",
-    ],
-    "pinot": [
-        "apache-airflow[apache-pinot]",
-    ],
-    "s3": [
-        "apache-airflow[amazon]",
-    ],
-    "spark": [
-        "apache-airflow[apache-spark]",
-    ],
-    "webhdfs": [
-        "apache-airflow[apache-webhdfs]",
-    ],
-    "winrm": [
-        "apache-airflow[microsoft-winrm]",
-    ],
-}
-
-# When you remove a dependency from the list, you should also make sure to add the dependency to be removed
-# in the scripts/docker/install_airflow_dependencies_from_branch_tip.sh script DEPENDENCIES_TO_REMOVE
-# in order to make sure the dependency is not installed in the CI image build process from the main
-# of Airflow branch. After your PR is merged, you should remove it from the list there.
 DEPENDENCIES = [
     # Alembic is important to handle our migrations in predictable and performant way. It is developed
     # together with SQLAlchemy. Our experience with Alembic is that it very stable in minor version
@@ -428,10 +367,13 @@ DEPENDENCIES = [
     "cryptography>=41.0.0",
     "deprecated>=1.2.13",
     "dill>=0.2.2",
+    # Required for python 3.9 to work with new annotations styles. Check package
+    # description on PyPI for more details: https://pypi.org/project/eval-type-backport/
+    'eval-type-backport>=0.2.0;python_version<"3.10"',
     "fastapi[standard]>=0.112.2",
     "flask-caching>=2.0.0",
     # Flask-Session 0.6 add new arguments into the SqlAlchemySessionInterface constructor as well as
-    # all parameters now are mandatory which make AirflowDatabaseSessionInterface incopatible with this version.
+    # all parameters now are mandatory which make AirflowDatabaseSessionInterface incompatible with this version.
     "flask-session>=0.4.0,<0.6",
     "flask-wtf>=1.1.0",
     # Flask 2.3 is scheduled to introduce a number of deprecation removals - some of them might be breaking
@@ -439,14 +381,12 @@ DEPENDENCIES = [
     # We should remove the limitation after 2.3 is released and our dependencies are updated to handle it
     "flask>=2.2.1,<2.3",
     "fsspec>=2023.10.0",
+    "gitpython>=3.1.40",
     'google-re2>=1.0;python_version<"3.12"',
     'google-re2>=1.1;python_version>="3.12"',
     "gunicorn>=20.1.0",
     "httpx>=0.25.0",
     'importlib_metadata>=6.5;python_version<"3.12"',
-    # Importib_resources 6.2.0-6.3.1 break pytest_rewrite
-    # see https://github.com/python/importlib_resources/issues/299
-    'importlib_resources>=5.2,!=6.2.0,!=6.3.0,!=6.3.1;python_version<"3.9"',
     "itsdangerous>=2.0",
     "jinja2>=3.0.0",
     "jsonschema>=4.18.0",
@@ -458,16 +398,18 @@ DEPENDENCIES = [
     "marshmallow-oneofschema>=2.0.1",
     "mdit-py-plugins>=0.3.0",
     "methodtools>=0.4.7",
-    "opentelemetry-api>=1.15.0",
-    "opentelemetry-exporter-otlp>=1.15.0",
+    "opentelemetry-api>=1.24.0",
+    "opentelemetry-exporter-otlp>=1.24.0",
     "packaging>=23.0",
     "pathspec>=0.9.0",
     'pendulum>=2.1.2,<4.0;python_version<"3.12"',
     'pendulum>=3.0.0,<4.0;python_version>="3.12"',
     "pluggy>=1.5.0",
     "psutil>=5.8.0",
-    "pydantic>=2.3.0",
-    "pygments>=2.0.1",
+    "pydantic>=2.10.2",
+    # Pygments 2.19.0 improperly renders .ini files with dictionaries as values
+    # See https://github.com/pygments/pygments/issues/2834
+    "pygments>=2.0.1,!=2.19.0",
     "pyjwt>=2.0.0",
     "python-daemon>=3.0.0",
     "python-dateutil>=2.7.0",
@@ -486,17 +428,14 @@ DEPENDENCIES = [
     # The issue tracking it is https://github.com/apache/airflow/issues/28723
     "sqlalchemy>=1.4.36,<2.0",
     "sqlalchemy-jsonfield>=1.0",
+    "sqlalchemy-utils>=0.41.2",
     "tabulate>=0.7.5",
     "tenacity>=8.0.0,!=8.2.0",
-    "termcolor>=1.1.0",
-    # We should remove this dependency when Providers are limited to Airflow 2.7+
-    # as we replaced the usage of unicodecsv with csv in Airflow 2.7
-    # See https://github.com/apache/airflow/pull/31693
-    # We should also remove "3rd-party-licenses/LICENSE-unicodecsv.txt" file when we remove this dependency
-    "unicodecsv>=0.14.1",
+    "termcolor>=2.5.0",
     # Universal Pathlib 0.2.4 adds extra validation for Paths and our integration with local file paths
     # Does not work with it Tracked in https://github.com/fsspec/universal_pathlib/issues/276
     "universal-pathlib>=0.2.2,!=0.2.4",
+    "uuid6>=2024.7.10",
     # Werkzug 3 breaks Flask-Login 0.6.2, also connexion needs to be updated to >= 3.0
     # we should remove this limitation when FAB supports Flask 2.3 and we migrate connexion to 3+
     "werkzeug>=2.0,<3",
@@ -508,7 +447,6 @@ ALL_DYNAMIC_EXTRA_DICTS: list[tuple[dict[str, list[str]], str]] = [
     (DOC_EXTRAS, "Doc extras"),
     (DEVEL_EXTRAS, "Devel extras"),
     (BUNDLE_EXTRAS, "Bundle extras"),
-    (DEPRECATED_EXTRAS, "Deprecated extras"),
 ]
 
 ALL_GENERATED_BUNDLE_EXTRAS = ["all", "all-core", "devel-all", "devel-ci"]
@@ -656,6 +594,8 @@ class CustomBuild(BuilderInterface[BuilderConfig, PluginManager]):
         commands = [
             ["rm -rf airflow/www/static/dist"],
             ["rm -rf airflow/www/node_modules"],
+            ["rm -rf airflow/ui/static/dist"],
+            ["rm -rf airflow/ui/node_modules"],
         ]
         for cmd in commands:
             run(cmd, cwd=work_dir.as_posix(), check=True, shell=True)
@@ -669,10 +609,11 @@ class CustomBuild(BuilderInterface[BuilderConfig, PluginManager]):
         work_dir = Path(self.root)
         commands = [
             ["pre-commit run --hook-stage manual compile-www-assets --all-files"],
+            ["pre-commit run --hook-stage manual compile-ui-assets --all-files"],
         ]
         for cmd in commands:
             run(cmd, cwd=work_dir.as_posix(), check=True, shell=True)
-        dist_path = work_dir / "airflow" / "www" / "static" / "dist"
+        dist_path = work_dir / "airflow" / "ui" / "static" / "dist"
         return dist_path.resolve().as_posix()
 
     def get_git_version(self) -> str:
@@ -932,7 +873,7 @@ class CustomBuildHook(BuildHookInterface[BuilderConfig]):
             for extra, deps in dict.items():
                 self.all_devel_extras.add(extra)
                 self._add_devel_ci_dependencies(deps, python_exclusion="")
-                if dict not in [DEPRECATED_EXTRAS, DEVEL_EXTRAS, DOC_EXTRAS]:
+                if dict not in [DEVEL_EXTRAS, DOC_EXTRAS]:
                     # do not add deprecated extras to "all" extras
                     self.all_non_devel_extras.add(extra)
                 if version == "standard":

@@ -22,10 +22,11 @@ from datetime import timedelta
 import pendulum
 import pytest
 
-from airflow.decorators import dag, task_group
+from airflow.decorators import dag, task, task_group
 from airflow.models.expandinput import DictOfListsExpandInput, ListOfDictsExpandInput, MappedArgument
 from airflow.operators.empty import EmptyOperator
 from airflow.utils.task_group import MappedTaskGroup
+from airflow.utils.trigger_rule import TriggerRule
 
 
 def test_task_group_with_overridden_kwargs():
@@ -131,6 +132,29 @@ def test_expand_fail_empty():
     with pytest.raises(TypeError) as ctx:
         pipeline()
     assert str(ctx.value) == "no arguments to expand against"
+
+
+@pytest.mark.db_test
+def test_fail_task_generated_mapping_with_trigger_rule_always(dag_maker, session):
+    @dag(schedule=None, start_date=pendulum.datetime(2022, 1, 1))
+    def pipeline():
+        @task
+        def get_param():
+            return ["a", "b", "c"]
+
+        @task(trigger_rule=TriggerRule.ALWAYS)
+        def t1(param):
+            return param
+
+        @task_group()
+        def tg(param):
+            t1(param)
+
+        with pytest.raises(
+            ValueError,
+            match="Task-generated mapping within a mapped task group is not allowed with trigger rule 'always'",
+        ):
+            tg.expand(param=get_param())
 
 
 def test_expand_create_mapped():
@@ -309,3 +333,19 @@ def test_override_dag_default_args_nested_tg():
     assert test_task.retries == 1
     assert test_task.owner == "y"
     assert test_task.execution_timeout == timedelta(seconds=10)
+
+
+def test_task_group_display_name_used_as_label():
+    """Test that the group_display_name for TaskGroup is used as the label for display on the UI."""
+
+    @dag(schedule=None, start_date=pendulum.datetime(2022, 1, 1))
+    def pipeline():
+        @task_group(group_display_name="my_custom_name")
+        def tg():
+            pass
+
+        tg()
+
+    p = pipeline()
+
+    assert p.task_group_dict["tg"].label == "my_custom_name"

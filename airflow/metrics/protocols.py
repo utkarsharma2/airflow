@@ -19,9 +19,7 @@ from __future__ import annotations
 
 import datetime
 import time
-from typing import Union
-
-from airflow.typing_compat import Protocol
+from typing import Protocol, Union
 
 DeltaType = Union[int, float, datetime.timedelta]
 
@@ -116,6 +114,6 @@ class Timer(TimerProtocol):
     def stop(self, send: bool = True) -> None:
         """Stop the timer, and optionally send it to stats backend."""
         if self._start_time is not None:
-            self.duration = time.perf_counter() - self._start_time
+            self.duration = 1000.0 * (time.perf_counter() - self._start_time)  # Convert to milliseconds.
         if send and self.real_timer:
             self.real_timer.stop()

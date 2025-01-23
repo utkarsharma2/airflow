@@ -27,11 +27,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from functools import lru_cache
 from pathlib import Path
 
 from airflow_breeze import NAME
 from airflow_breeze.utils.console import get_console
+from airflow_breeze.utils.functools_cache import clearable_cache
 from airflow_breeze.utils.reinstall import reinstall_breeze, warn_dependencies_changed, warn_non_editable
 from airflow_breeze.utils.shared_options import get_verbose, set_forced_answer
 
@@ -96,8 +96,12 @@ def get_package_setup_metadata_hash() -> str:
         from importlib_metadata import distribution  # type: ignore[no-redef, assignment]
 
     prefix = "Package config hash: "
-
-    for line in distribution("apache-airflow-breeze").metadata.as_string().splitlines(keepends=False):
+    metadata = distribution("apache-airflow-breeze").metadata
+    try:
+        description = metadata.json["description"]  # type: ignore[attr-defined]
+    except AttributeError:
+        description = metadata.as_string()
+    for line in description.splitlines(keepends=False):
         if line.startswith(prefix):
             return line[len(prefix) :]
     return "NOT FOUND"
@@ -167,8 +171,9 @@ def reinstall_if_setup_changed() -> bool:
             return False
         if "apache-airflow-breeze" in e.msg:
             print(
-                """Missing Package `apache-airflow-breeze`.
-                   Use `pipx install -e ./dev/breeze` to install the package."""
+                """Missing Package `apache-airflow-breeze`. Please install it.\n
+                   Use `uv tool install -e ./dev/breeze or `pipx install -e ./dev/breeze`
+                   to install the package."""
             )
             return False
     sources_hash = get_installation_sources_config_metadata_hash()
@@ -221,13 +226,13 @@ def get_used_airflow_sources() -> Path:
     return current_sources
 
 
-@lru_cache(maxsize=None)
+@clearable_cache
 def find_airflow_sources_root_to_operate_on() -> Path:
     """
-    Find the root of airflow sources we operate on. Handle the case when Breeze is installed via `pipx` from
-    a different source tree, so it searches upwards of the current directory to find the right root of
-    airflow directory we are actually in. This **might** be different than the sources of Airflow Breeze
-    was installed from.
+    Find the root of airflow sources we operate on. Handle the case when Breeze is installed via
+    `pipx` or `uv tool` from a different source tree, so it searches upwards of the current directory
+    to find the right root of airflow directory we are actually in. This **might** be different
+    than the sources of Airflow Breeze was installed from.
 
     If not found, we operate on Airflow sources that we were installed it. This handles the case when
     we run Breeze from a "random" directory.
@@ -281,9 +286,12 @@ def find_airflow_sources_root_to_operate_on() -> Path:
 AIRFLOW_SOURCES_ROOT = find_airflow_sources_root_to_operate_on().resolve()
 AIRFLOW_WWW_DIR = AIRFLOW_SOURCES_ROOT / "airflow" / "www"
 AIRFLOW_UI_DIR = AIRFLOW_SOURCES_ROOT / "airflow" / "ui"
-TESTS_PROVIDERS_ROOT = AIRFLOW_SOURCES_ROOT / "tests" / "providers"
-SYSTEM_TESTS_PROVIDERS_ROOT = AIRFLOW_SOURCES_ROOT / "tests" / "system" / "providers"
-AIRFLOW_PROVIDERS_ROOT = AIRFLOW_SOURCES_ROOT / "airflow" / "providers"
+AIRFLOW_ORIGINAL_PROVIDERS_DIR = AIRFLOW_SOURCES_ROOT / "airflow" / "providers"
+AIRFLOW_PROVIDERS_DIR = AIRFLOW_SOURCES_ROOT / "providers"
+OLD_AIRFLOW_PROVIDERS_SRC_DIR = AIRFLOW_PROVIDERS_DIR / "src"
+OLD_AIRFLOW_PROVIDERS_NS_PACKAGE = OLD_AIRFLOW_PROVIDERS_SRC_DIR / "airflow" / "providers"
+OLD_TESTS_PROVIDERS_ROOT = AIRFLOW_PROVIDERS_DIR / "tests"
+OLD_SYSTEM_TESTS_PROVIDERS_ROOT = AIRFLOW_PROVIDERS_DIR / "tests" / "system"
 DOCS_ROOT = AIRFLOW_SOURCES_ROOT / "docs"
 BUILD_CACHE_DIR = AIRFLOW_SOURCES_ROOT / ".build"
 GENERATED_DIR = AIRFLOW_SOURCES_ROOT / "generated"
@@ -326,7 +334,10 @@ GENERATED_DOCKER_LOCK_FILE = SCRIPTS_CI_DOCKER_COMPOSE_DIR / "_generated.lock"
 DOCKER_CONTEXT_DIR = AIRFLOW_SOURCES_ROOT / "docker-context-files"
 CACHE_TMP_FILE_DIR = tempfile.TemporaryDirectory()
 OUTPUT_LOG = Path(CACHE_TMP_FILE_DIR.name, "out.log")
-BREEZE_SOURCES_ROOT = AIRFLOW_SOURCES_ROOT / "dev" / "breeze"
+BREEZE_PROJECT_ROOT = AIRFLOW_SOURCES_ROOT / "dev" / "breeze"
+BREEZE_SOURCES_DIR = BREEZE_PROJECT_ROOT / "src"
+BREEZE_DOC_DIR = BREEZE_PROJECT_ROOT / "doc"
+BREEZE_IMAGES_DIR = BREEZE_DOC_DIR / "images"
 AIRFLOW_HOME_DIR = Path(os.environ.get("AIRFLOW_HOME", Path.home() / "airflow"))
 
 

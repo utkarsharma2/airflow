@@ -88,6 +88,7 @@ This file contains several service definitions:
 
 - ``airflow-scheduler`` - The :doc:`scheduler </administration-and-deployment/scheduler>` monitors all tasks and DAGs, then triggers the
   task instances once their dependencies are complete.
+- ``airflow-dag-processor`` - The DAG processor parses DAG files.
 - ``airflow-webserver`` - The webserver is available at ``http://localhost:8080``.
 - ``airflow-worker`` - The worker that executes the tasks given by the scheduler.
 - ``airflow-triggerer`` - The triggerer runs an event loop for deferrable tasks.
@@ -373,13 +374,13 @@ Steps:
 .. code-block:: yaml
 
     airflow-python:
-    <<: *airflow-common
-    profiles:
-        - debug
-    environment:
-        <<: *airflow-common-env
-    user: "50000:0"
-    entrypoint: ["bash"]
+      <<: *airflow-common
+      profiles:
+          - debug
+      environment:
+          <<: *airflow-common-env
+      user: "50000:0"
+      entrypoint: [ "/bin/bash", "-c" ]
 
 .. note::
 
@@ -398,6 +399,11 @@ Steps:
     :alt: Configuring the container's Python interpreter in PyCharm, step diagram
 
 Building the interpreter index might take some time.
+3) Add ``exec`` to docker-compose/command and actions in python service
+
+.. image:: /img/docker-compose-pycharm.png
+    :alt: Configuring the container's Python interpreter in PyCharm, step diagram
+
 Once configured, you can debug your Airflow code within the container environment, mimicking your local setup.
 
 

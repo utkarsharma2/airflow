@@ -91,10 +91,84 @@ If you are using PostgreSQL as your database, you will likely want to enable `Pg
 Airflow can open a lot of database connections due to its distributed nature and using a connection pooler can significantly
 reduce the number of open connections on the database.
 
+Database credentials stored Values file
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 .. code-block:: yaml
 
   pgbouncer:
     enabled: true
+
+
+Database credentials stored Kubernetes Secret
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The default connection string in this case will not work you need to modify accordingly
+
+.. code-block:: bash
+
+  kubectl create secret generic mydatabase --from-literal=connection=postgresql://user:pass@pgbouncer_svc_name.deployment_namespace:6543/airflow-metadata
+
+Two additional Kubernetes Secret required to PgBouncer able to properly work in this configuration:
+
+``airflow-pgbouncer-stats``
+
+.. code-block:: bash
+
+  kubectl create secret generic airflow-pgbouncer-stats --from-literal=connection=postgresql://user:pass@127.0.0.1:6543/pgbouncer?sslmode=disable
+
+``airflow-pgbouncer-config``
+
+.. code-block:: yaml
+
+  apiVersion: v1
+  kind: Secret
+  metadata:
+    name: airflow-pgbouncer-config
+  data:
+    pgbouncer.ini: dmFsdWUtMg0KDQo=
+    users.txt: dmFsdWUtMg0KDQo=
+
+
+``pgbouncer.ini`` equal to the base64 encoded version of this text
+
+.. code-block:: text
+
+  [databases]
+  airflow-metadata = host={external_database_host} dbname={external_database_dbname} port=5432 pool_size=10
+
+  [pgbouncer]
+  pool_mode = transaction
+  listen_port = 6543
+  listen_addr = *
+  auth_type = scram-sha-256
+  auth_file = /etc/pgbouncer/users.txt
+  stats_users = postgres
+  ignore_startup_parameters = extra_float_digits
+  max_client_conn = 100
+  verbose = 0
+  log_disconnections = 0
+  log_connections = 0
+
+  server_tls_sslmode = prefer
+  server_tls_ciphers = normal
+
+``users.txt`` equal to the base64 encoded version of this text
+
+.. code-block:: text
+
+  "{ external_database_host }" "{ external_database_pass }"
+
+The ``values.yaml`` should looks like this
+
+.. code-block:: yaml
+
+  pgbouncer:
+    enabled: true
+    configSecretName: airflow-pgbouncer-config
+    metricsExporterSidecar:
+      statsSecretName: airflow-pgbouncer-stats
+
 
 Depending on the size of your Airflow instance, you may want to adjust the following as well (defaults are shown):
 
@@ -162,7 +236,8 @@ This setting can be configured in the Airflow chart at different levels:
   webserver:
     safeToEvict: true
 
-When using ``KubernetesExecutor``, ``workers.safeToEvict`` should be set to ``false`` to avoid them being removed before finishing.
+``workers.safeToEvict`` defaults to ``false``, and when using ``KubernetesExecutor``
+``workers.safeToEvict`` shouldn't be set to ``true`` or workers may be removed before finishing.
 
 Extending and customizing Airflow Image
 ---------------------------------------
@@ -304,6 +379,23 @@ To use an external StatsD instance:
       statsd_on: true
       statsd_host: ...
       statsd_port: ...
+
+IPv6 StatsD
+^^^^^^^^^^^^^^^
+
+To use an StatsD instance with IPv6 address. Example with Kubernetes with IPv6 enabled:
+
+.. code-block:: yaml
+
+  statsd:
+    enabled: true
+  config:
+    metrics:  # or 'scheduler' for Airflow 1
+      statsd_on: 'True'
+      statsd_host: ...
+      statsd_ipv6: 'True'
+      statsd_port: ...
+      statsd_prefix: airflow
 
 Datadog
 ^^^^^^^
@@ -541,7 +633,7 @@ Here is the full list of secrets that can be disabled and replaced by ``_CMD`` a
 | ``<RELEASE_NAME>-airflow-result-backend``             | ``.Values.data.resultBackendSecretName`` | | ``AIRFLOW__CELERY__CELERY_RESULT_BACKEND``     |
 |                                                       |                                          | | ``AIRFLOW__CELERY__RESULT_BACKEND``            |
 +-------------------------------------------------------+------------------------------------------+--------------------------------------------------+
-| ``<RELEASE_NAME>-airflow-brokerUrl``                  | ``.Values.data.brokerUrlSecretName``     | ``AIRFLOW__CELERY__BROKER_URL``                  |
+| ``<RELEASE_NAME>-airflow-broker-url``                 | ``.Values.data.brokerUrlSecretName``     | ``AIRFLOW__CELERY__BROKER_URL``                  |
 +-------------------------------------------------------+------------------------------------------+--------------------------------------------------+
 | ``<RELEASE_NAME>-elasticsearch``                      | ``.Values.elasticsearch.secretName``     | | ``AIRFLOW__ELASTICSEARCH__HOST``               |
 |                                                       |                                          | | ``AIRFLOW__ELASTICSEARCH__ELASTICSEARCH_HOST`` |

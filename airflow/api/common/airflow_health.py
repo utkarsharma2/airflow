@@ -32,6 +32,7 @@ def get_airflow_health() -> dict[str, Any]:
     latest_scheduler_heartbeat = None
     latest_triggerer_heartbeat = None
     latest_dag_processor_heartbeat = None
+
     scheduler_status = UNHEALTHY
     triggerer_status: str | None = UNHEALTHY
     dag_processor_status: str | None = UNHEALTHY

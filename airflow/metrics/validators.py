@@ -23,13 +23,15 @@ import abc
 import logging
 import string
 import warnings
+from collections.abc import Iterable
 from functools import partial, wraps
-from typing import Callable, Iterable, Pattern, cast
+from re import Pattern
+from typing import Callable, cast
 
 import re2
 
 from airflow.configuration import conf
-from airflow.exceptions import InvalidStatsNameException, RemovedInAirflow3Warning
+from airflow.exceptions import InvalidStatsNameException
 
 log = logging.getLogger(__name__)
 
@@ -44,7 +46,7 @@ class MetricNameLengthExemptionWarning(Warning):
 
 # Only characters in the character set are considered valid
 # for the stat_name if stat_name_default_handler is used.
-ALLOWED_CHARACTERS = frozenset(string.ascii_letters + string.digits + "_.-")
+ALLOWED_CHARACTERS = frozenset(string.ascii_letters + string.digits + "_.-/")
 
 # The following set contains existing metrics whose names are too long for
 # OpenTelemetry and should be deprecated over time. This is implemented to
@@ -88,24 +90,13 @@ DEFAULT_VALIDATOR_TYPE = "allow"
 
 def get_validator() -> ListValidator:
     validators = {
-        "basic": {"allow": AllowListValidator, "block": BlockListValidator},
-        "pattern": {"allow": PatternAllowListValidator, "block": PatternBlockListValidator},
+        "allow": PatternAllowListValidator,
+        "block": PatternBlockListValidator,
     }
     metric_lists = {
         "allow": (metric_allow_list := conf.get("metrics", "metrics_allow_list", fallback=None)),
         "block": (metric_block_list := conf.get("metrics", "metrics_block_list", fallback=None)),
     }
-
-    use_pattern = conf.getboolean("metrics", "metrics_use_pattern_match", fallback=False)
-    validator_type = "pattern" if use_pattern else "basic"
-
-    if not use_pattern:
-        warnings.warn(
-            "The basic metric validator will be deprecated in the future in favor of pattern-matching.  "
-            "You can try this now by setting config option metrics_use_pattern_match to True.",
-            RemovedInAirflow3Warning,
-            stacklevel=2,
-        )
 
     if metric_allow_list:
         list_type = "allow"
@@ -118,7 +109,7 @@ def get_validator() -> ListValidator:
     else:
         list_type = DEFAULT_VALIDATOR_TYPE
 
-    return validators[validator_type][list_type](metric_lists[list_type])
+    return validators[list_type](metric_lists[list_type])
 
 
 def validate_stat(fn: Callable) -> Callable:
@@ -263,32 +254,12 @@ class ListValidator(metaclass=abc.ABCMeta):
         return False
 
 
-class AllowListValidator(ListValidator):
-    """AllowListValidator only allows names that match the allowed prefixes."""
-
-    def test(self, name: str) -> bool:
-        if self.validate_list is not None:
-            return name.strip().lower().startswith(self.validate_list)
-        else:
-            return True  # default is all metrics are allowed
-
-
 class PatternAllowListValidator(ListValidator):
     """Match the provided strings anywhere in the metric name."""
 
     def test(self, name: str) -> bool:
         if self.validate_list is not None:
             return super()._has_pattern_match(name)
-        else:
-            return True  # default is all metrics are allowed
-
-
-class BlockListValidator(ListValidator):
-    """BlockListValidator only allows names that do not match the blocked prefixes."""
-
-    def test(self, name: str) -> bool:
-        if self.validate_list is not None:
-            return not name.strip().lower().startswith(self.validate_list)
         else:
             return True  # default is all metrics are allowed
 

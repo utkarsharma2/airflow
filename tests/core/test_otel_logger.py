@@ -235,11 +235,15 @@ class TestOtelMetrics:
         assert self.map[full_name(name)].value == 1
 
     def test_timing_new_metric(self, name):
-        self.stats.timing(name, dt=123)
+        import datetime
+
+        self.stats.timing(name, dt=datetime.timedelta(seconds=123))
 
         self.meter.get_meter().create_observable_gauge.assert_called_once_with(
             name=full_name(name), callbacks=ANY
         )
+        expected_value = 123000.0
+        assert self.map[full_name(name)].value == expected_value
 
     def test_timing_new_metric_with_tags(self, name):
         tags = {"hello": "world"}
@@ -271,7 +275,8 @@ class TestOtelMetrics:
             pass
 
         assert isinstance(timer.duration, float)
-        assert timer.duration == 3.14
+        expected_duration = 3140.0
+        assert timer.duration == expected_duration
         assert mock_time.call_count == 2
         self.meter.get_meter().create_observable_gauge.assert_called_once_with(
             name=full_name(name), callbacks=ANY
@@ -283,7 +288,8 @@ class TestOtelMetrics:
             pass
 
         assert isinstance(timer.duration, float)
-        assert timer.duration == 3.14
+        expected_duration = 3140.0
+        assert timer.duration == expected_duration
         assert mock_time.call_count == 2
         self.meter.get_meter().create_observable_gauge.assert_not_called()
 
@@ -295,7 +301,8 @@ class TestOtelMetrics:
         timer.stop(send=False)
 
         assert isinstance(timer.duration, float)
-        assert timer.duration == 3.14
+        expected_value = 3140.0
+        assert timer.duration == expected_value
         assert mock_time.call_count == 2
         self.meter.get_meter().create_observable_gauge.assert_not_called()
 
@@ -307,7 +314,8 @@ class TestOtelMetrics:
         timer.stop(send=True)
 
         assert isinstance(timer.duration, float)
-        assert timer.duration == 3.14
+        expected_value = 3140.0
+        assert timer.duration == expected_value
         assert mock_time.call_count == 2
         self.meter.get_meter().create_observable_gauge.assert_called_once_with(
             name=full_name(name), callbacks=ANY

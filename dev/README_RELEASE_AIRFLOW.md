@@ -214,35 +214,39 @@ The Release Candidate artifacts we vote upon should be the exact ones we vote ag
 
 - Set environment variables
 
-    ```shell script
+```shell script
 
-    # You can avoid repeating this command for every release if you will set it in .zshrc
-    # see https://unix.stackexchange.com/questions/608842/zshrc-export-gpg-tty-tty-says-not-a-tty
-    export GPG_TTY=$(tty)
+# You can avoid repeating this command for every release if you will set it in .zshrc
+# see https://unix.stackexchange.com/questions/608842/zshrc-export-gpg-tty-tty-says-not-a-tty
+export GPG_TTY=$(tty)
 
-    # Set Version
-    export VERSION=2.1.2rc3
-    export VERSION_SUFFIX=rc3
-    export VERSION_BRANCH=2-1
-    export VERSION_WITHOUT_RC=${VERSION/rc?/}
+# Set Version
+export VERSION=2.1.2rc3
+export VERSION_SUFFIX=rc3
+export VERSION_BRANCH=2-1
+export VERSION_WITHOUT_RC=${VERSION/rc?/}
 
-    # Set AIRFLOW_REPO_ROOT to the path of your git repo
-    export AIRFLOW_REPO_ROOT=$(pwd)
+# Set AIRFLOW_REPO_ROOT to the path of your git repo
+export AIRFLOW_REPO_ROOT=$(pwd)
 
 
-    # Example after cloning
-    git clone https://github.com/apache/airflow.git airflow
-    cd airflow
-    export AIRFLOW_REPO_ROOT=$(pwd)
-    ```
+# Example after cloning
+git clone https://github.com/apache/airflow.git airflow
+cd airflow
+export AIRFLOW_REPO_ROOT=$(pwd)
+```
 
 - Install `breeze` command:
 
-    ```shell script
-    pipx install -e ./dev/breeze
-    ```
+```shell script
+uv tool install -e ./dev/breeze
+```
 
+or (if you prefer to use pipx):
 
+```shell script
+pipx install -e ./dev/breeze
+```
 
 - For major/minor version release, run the following commands to create the 'test' and 'stable' branches.
 
@@ -404,8 +408,7 @@ https://github.com/apache/airflow/blob/main/dev/README_RELEASE_AIRFLOW.md#verify
 The test procedure for contributors and members of the community who would like to test this RC is described in:
 https://github.com/apache/airflow/blob/main/dev/README_RELEASE_AIRFLOW.md#verify-the-release-candidate-by-contributors
 
-
-Please note that the version number excludes the \`rcX\` string, so it's now
+Please note that the version number excludes the 'rcX' string, so it's now
 simply ${VERSION_WITHOUT_RC}. This will allow us to rename the artifact without modifying
 the artifact checksums when we actually release.
 
@@ -682,7 +685,7 @@ Optionally it can be followed with constraints
 
 ```shell script
 pip install apache-airflow==<VERSION>rc<X> \
-  --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-<VERSION>/constraints-3.8.txt"`
+  --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-<VERSION>/constraints-3.9.txt"`
 ```
 
 Note that the constraints contain python version that you are installing it with.
@@ -694,7 +697,7 @@ There is also an easy way of installation with Breeze if you have the latest sou
 Running the following command will use tmux inside breeze, create `admin` user and run Webserver & Scheduler:
 
 ```shell script
-breeze start-airflow --use-airflow-version 2.7.0rc1 --python 3.8 --backend postgres
+breeze start-airflow --use-airflow-version 2.7.0rc1 --python 3.9 --backend postgres
 ```
 
 You can also choose different executors and extras to install when you are installing airflow this way. For
@@ -702,7 +705,7 @@ example in order to run Airflow with CeleryExecutor and install celery, google a
 Airflow 2.7.0, you need to have celery provider installed to run Airflow with CeleryExecutor) you can run:
 
 ```shell script
-breeze start-airflow --use-airflow-version 2.7.0rc1 --python 3.8 --backend postgres \
+breeze start-airflow --use-airflow-version 2.7.0rc1 --python 3.9 --backend postgres \
   --executor CeleryExecutor --airflow-extras "celery,google,amazon"
 ```
 
@@ -838,7 +841,7 @@ the older branches, you should set the "skip" field to true.
 ## Verify production images
 
 ```shell script
-for PYTHON in 3.8 3.9 3.10 3.11 3.12
+for PYTHON in 3.9 3.10 3.11 3.12
 do
     docker pull apache/airflow:${VERSION}-python${PYTHON}
     breeze prod-image verify --image-name apache/airflow:${VERSION}-python${PYTHON}
@@ -889,7 +892,7 @@ Documentation for providers can be found in the ``/docs/apache-airflow`` directo
     # and finally open a PR
     ```
 
-The `--run-in-parallell` switch allows to speed up SBOM generation significantly, but it might take a lot
+The `--run-in-parallel` switch allows to speed up SBOM generation significantly, but it might take a lot
 of memory - if you are running into memory issues you can limit parallelism by setting `--parallelism N`
 where N is a number of parallel `cdxgen` servers that should be started.
 
@@ -920,7 +923,7 @@ Dear Airflow community,
 
 I'm happy to announce that Airflow ${VERSION} was just released.
 
-The released sources and packages can be downloaded via https://airflow.apache.org/docs/apache-airflow/stable/installation/installing-from-sources.html
+The released sources and packages can be downloaded via https://airflow.apache.org/docs/apache-airflow/${VERSION}/installation/installing-from-sources.html
 
 Other installation methods are described in https://airflow.apache.org/docs/apache-airflow/stable/installation/
 
@@ -1006,9 +1009,10 @@ EOF
 ------------------------------------------------------------------------------------------------------------
 Announcement is done from official Apache-Airflow accounts.
 
-* Twitter: https://twitter.com/ApacheAirflow
-* Linkedin: https://www.linkedin.com/company/apache-airflow/
+* X: https://x.com/ApacheAirflow
+* LinkedIn: https://www.linkedin.com/company/apache-airflow/
 * Fosstodon: https://fosstodon.org/@airflow
+* Bluesky: https://bsky.app/profile/apache-airflow.bsky.social
 
 Make sure attach the release image generated with Figma to the post.
 If you don't have access to the account ask a PMC member to post.

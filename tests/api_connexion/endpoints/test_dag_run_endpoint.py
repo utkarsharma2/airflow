@@ -16,6 +16,7 @@
 # under the License.
 from __future__ import annotations
 
+import json
 import urllib
 from datetime import timedelta
 from unittest import mock
@@ -24,27 +25,29 @@ import pytest
 import time_machine
 
 from airflow.api_connexion.exceptions import EXCEPTIONS_LINK_MAP
-from airflow.datasets import Dataset
+from airflow.dag_processing.bundles.manager import DagBundlesManager
+from airflow.models import Log
+from airflow.models.asset import AssetEvent, AssetModel
 from airflow.models.dag import DAG, DagModel
 from airflow.models.dagrun import DagRun
-from airflow.models.dataset import DatasetEvent, DatasetModel
 from airflow.models.param import Param
 from airflow.operators.empty import EmptyOperator
-from airflow.security import permissions
+from airflow.sdk.definitions.asset import Asset
 from airflow.utils import timezone
 from airflow.utils.session import create_session, provide_session
 from airflow.utils.state import DagRunState, State
 from airflow.utils.types import DagRunType
-from tests.test_utils.api_connexion_utils import assert_401, create_user, delete_roles, delete_user
-from tests.test_utils.compat import AIRFLOW_V_3_0_PLUS
-from tests.test_utils.config import conf_vars
-from tests.test_utils.db import clear_db_dags, clear_db_runs, clear_db_serialized_dags
-from tests.test_utils.www import _check_last_log
+
+from tests_common.test_utils.api_connexion_utils import assert_401, create_user, delete_user
+from tests_common.test_utils.config import conf_vars
+from tests_common.test_utils.db import clear_db_dags, clear_db_runs, clear_db_serialized_dags
+from tests_common.test_utils.version_compat import AIRFLOW_V_3_0_PLUS
+from tests_common.test_utils.www import _check_last_log
 
 if AIRFLOW_V_3_0_PLUS:
     from airflow.utils.types import DagRunTriggeredByType
 
-pytestmark = [pytest.mark.db_test, pytest.mark.skip_if_database_isolation_mode]
+pytestmark = pytest.mark.db_test
 
 
 @pytest.fixture(scope="module")
@@ -52,79 +55,16 @@ def configured_app(minimal_app_for_api):
     app = minimal_app_for_api
 
     create_user(
-        app,  # type: ignore
+        app,
         username="test",
-        role_name="Test",
-        permissions=[
-            (permissions.ACTION_CAN_READ, permissions.RESOURCE_DAG),
-            (permissions.ACTION_CAN_READ, permissions.RESOURCE_DATASET),
-            (permissions.ACTION_CAN_READ, permissions.RESOURCE_CLUSTER_ACTIVITY),
-            (permissions.ACTION_CAN_EDIT, permissions.RESOURCE_DAG),
-            (permissions.ACTION_CAN_CREATE, permissions.RESOURCE_DAG_RUN),
-            (permissions.ACTION_CAN_READ, permissions.RESOURCE_DAG_RUN),
-            (permissions.ACTION_CAN_EDIT, permissions.RESOURCE_DAG_RUN),
-            (permissions.ACTION_CAN_DELETE, permissions.RESOURCE_DAG_RUN),
-        ],
+        role_name="admin",
     )
-    create_user(
-        app,  # type: ignore
-        username="test_no_dag_run_create_permission",
-        role_name="TestNoDagRunCreatePermission",
-        permissions=[
-            (permissions.ACTION_CAN_READ, permissions.RESOURCE_DAG),
-            (permissions.ACTION_CAN_READ, permissions.RESOURCE_DATASET),
-            (permissions.ACTION_CAN_READ, permissions.RESOURCE_CLUSTER_ACTIVITY),
-            (permissions.ACTION_CAN_EDIT, permissions.RESOURCE_DAG),
-            (permissions.ACTION_CAN_READ, permissions.RESOURCE_DAG_RUN),
-            (permissions.ACTION_CAN_EDIT, permissions.RESOURCE_DAG_RUN),
-            (permissions.ACTION_CAN_DELETE, permissions.RESOURCE_DAG_RUN),
-        ],
-    )
-    create_user(
-        app,  # type: ignore
-        username="test_dag_view_only",
-        role_name="TestViewDags",
-        permissions=[
-            (permissions.ACTION_CAN_READ, permissions.RESOURCE_DAG),
-            (permissions.ACTION_CAN_CREATE, permissions.RESOURCE_DAG_RUN),
-            (permissions.ACTION_CAN_READ, permissions.RESOURCE_DAG_RUN),
-            (permissions.ACTION_CAN_EDIT, permissions.RESOURCE_DAG_RUN),
-            (permissions.ACTION_CAN_DELETE, permissions.RESOURCE_DAG_RUN),
-        ],
-    )
-    create_user(
-        app,  # type: ignore
-        username="test_view_dags",
-        role_name="TestViewDags",
-        permissions=[
-            (permissions.ACTION_CAN_READ, permissions.RESOURCE_DAG),
-            (permissions.ACTION_CAN_CREATE, permissions.RESOURCE_DAG_RUN),
-        ],
-    )
-    create_user(
-        app,  # type: ignore
-        username="test_granular_permissions",
-        role_name="TestGranularDag",
-        permissions=[(permissions.ACTION_CAN_READ, permissions.RESOURCE_DAG_RUN)],
-    )
-    app.appbuilder.sm.sync_perm_for_dag(  # type: ignore
-        "TEST_DAG_ID",
-        access_control={
-            "TestGranularDag": {permissions.ACTION_CAN_EDIT, permissions.ACTION_CAN_READ},
-            "TestNoDagRunCreatePermission": {permissions.RESOURCE_DAG_RUN: {permissions.ACTION_CAN_CREATE}},
-        },
-    )
-    create_user(app, username="test_no_permissions", role_name="TestNoPermissions")  # type: ignore
+    create_user(app, username="test_no_permissions", role_name=None)
 
     yield app
 
-    delete_user(app, username="test")  # type: ignore
-    delete_user(app, username="test_dag_view_only")  # type: ignore
-    delete_user(app, username="test_view_dags")  # type: ignore
-    delete_user(app, username="test_granular_permissions")  # type: ignore
-    delete_user(app, username="test_no_permissions")  # type: ignore
-    delete_user(app, username="test_no_dag_run_create_permission")  # type: ignore
-    delete_roles(app)
+    delete_user(app, username="test")
+    delete_user(app, username="test_no_permissions")
 
 
 class TestDagRunEndpoint:
@@ -151,7 +91,9 @@ class TestDagRunEndpoint:
         with create_session() as session:
             session.add(dag_instance)
         dag = DAG(dag_id=dag_id, schedule=None, params={"validated_number": Param(1, minimum=1, maximum=10)})
+        DagBundlesManager().sync_bundles_to_db()
         self.app.dag_bag.bag_dag(dag)
+        self.app.dag_bag.sync_to_db("dags-folder", None)
         return dag_instance
 
     def _create_test_dag_run(self, state=DagRunState.RUNNING, extra_dag=False, commit=True, idx_start=1):
@@ -166,7 +108,7 @@ class TestDagRunEndpoint:
                 dag_id="TEST_DAG_ID",
                 run_id=f"TEST_DAG_RUN_ID_{i}",
                 run_type=DagRunType.MANUAL,
-                execution_date=timezone.parse(self.default_time) + timedelta(days=i - 1),
+                logical_date=timezone.parse(self.default_time) + timedelta(days=i - 1),
                 start_date=timezone.parse(self.default_time),
                 external_trigger=True,
                 state=state,
@@ -183,7 +125,7 @@ class TestDagRunEndpoint:
                         dag_id=f"TEST_DAG_ID_{i}",
                         run_id=f"TEST_DAG_RUN_ID_{i}",
                         run_type=DagRunType.MANUAL,
-                        execution_date=timezone.parse(self.default_time_2),
+                        logical_date=timezone.parse(self.default_time_2),
                         start_date=timezone.parse(self.default_time),
                         external_trigger=True,
                         state=state,
@@ -239,18 +181,6 @@ class TestDeleteDagRun(TestDagRunEndpoint):
         )
         assert response.status_code == 403
 
-    @pytest.mark.parametrize(
-        "set_auto_role_public, expected_status_code",
-        (("Public", 403), ("Admin", 204)),
-        indirect=["set_auto_role_public"],
-    )
-    def test_with_auth_role_public_set(self, set_auto_role_public, expected_status_code, session):
-        session.add_all(self._create_test_dag_run())
-        session.commit()
-        response = self.client.delete("api/v1/dags/TEST_DAG_ID/dagRuns/TEST_DAG_RUN_ID_1")
-
-        assert response.status_code == expected_status_code
-
 
 class TestGetDagRun(TestDagRunEndpoint):
     def test_should_respond_200(self, session):
@@ -259,7 +189,7 @@ class TestGetDagRun(TestDagRunEndpoint):
             dag_id="TEST_DAG_ID",
             run_id="TEST_DAG_RUN_ID",
             run_type=DagRunType.MANUAL,
-            execution_date=timezone.parse(self.default_time),
+            logical_date=timezone.parse(self.default_time),
             start_date=timezone.parse(self.default_time),
             external_trigger=True,
             state="running",
@@ -271,7 +201,6 @@ class TestGetDagRun(TestDagRunEndpoint):
             "end_date": None,
             "state": "running",
             "logical_date": self.default_time,
-            "execution_date": self.default_time,
             "external_trigger": True,
             "start_date": self.default_time,
             "conf": {},
@@ -310,7 +239,7 @@ class TestGetDagRun(TestDagRunEndpoint):
             dag_id="TEST_DAG_ID",
             run_id="TEST_DAG_RUN_ID",
             run_type=DagRunType.MANUAL,
-            execution_date=timezone.parse(self.default_time),
+            logical_date=timezone.parse(self.default_time),
             start_date=timezone.parse(self.default_time),
             external_trigger=True,
         )
@@ -325,7 +254,7 @@ class TestGetDagRun(TestDagRunEndpoint):
         "fields",
         [
             ["dag_run_id", "logical_date"],
-            ["dag_run_id", "state", "conf", "execution_date"],
+            ["dag_run_id", "state", "conf", "logical_date"],
         ],
     )
     def test_should_return_specified_fields(self, session, fields):
@@ -333,7 +262,7 @@ class TestGetDagRun(TestDagRunEndpoint):
             dag_id="TEST_DAG_ID",
             run_id="TEST_DAG_RUN_ID",
             run_type=DagRunType.MANUAL,
-            execution_date=timezone.parse(self.default_time),
+            logical_date=timezone.parse(self.default_time),
             start_date=timezone.parse(self.default_time),
             external_trigger=True,
             state="running",
@@ -348,7 +277,6 @@ class TestGetDagRun(TestDagRunEndpoint):
         )
         assert response.status_code == 200
         res_json = response.json
-        print("get dagRun", res_json)
         assert len(res_json.keys()) == len(fields)
         for field in fields:
             assert field in res_json
@@ -358,7 +286,7 @@ class TestGetDagRun(TestDagRunEndpoint):
             dag_id="TEST_DAG_ID",
             run_id="TEST_DAG_RUN_ID",
             run_type=DagRunType.MANUAL,
-            execution_date=timezone.parse(self.default_time),
+            logical_date=timezone.parse(self.default_time),
             start_date=timezone.parse(self.default_time),
             external_trigger=True,
             state="running",
@@ -374,29 +302,6 @@ class TestGetDagRun(TestDagRunEndpoint):
         )
         assert response.status_code == 400, f"Current code: {response.status_code}"
 
-    @pytest.mark.parametrize(
-        "set_auto_role_public, expected_status_code",
-        (("Public", 403), ("Admin", 200)),
-        indirect=["set_auto_role_public"],
-    )
-    def test_with_auth_role_public_set(self, set_auto_role_public, expected_status_code, session):
-        dagrun_model = DagRun(
-            dag_id="TEST_DAG_ID",
-            run_id="TEST_DAG_RUN_ID",
-            run_type=DagRunType.MANUAL,
-            execution_date=timezone.parse(self.default_time),
-            start_date=timezone.parse(self.default_time),
-            external_trigger=True,
-            state="running",
-        )
-        session.add(dagrun_model)
-        session.commit()
-        result = session.query(DagRun).all()
-        assert len(result) == 1
-
-        response = self.client.get("api/v1/dags/TEST_DAG_ID/dagRuns/TEST_DAG_RUN_ID")
-        assert response.status_code == expected_status_code
-
 
 class TestGetDagRuns(TestDagRunEndpoint):
     def test_should_respond_200(self, session):
@@ -406,7 +311,6 @@ class TestGetDagRuns(TestDagRunEndpoint):
             "dag_run_id": "TEST_DAG_RUN_ID_1",
             "end_date": None,
             "state": "running",
-            "execution_date": self.default_time,
             "logical_date": self.default_time,
             "external_trigger": True,
             "start_date": self.default_time,
@@ -423,7 +327,6 @@ class TestGetDagRuns(TestDagRunEndpoint):
             "dag_run_id": "TEST_DAG_RUN_ID_2",
             "end_date": None,
             "state": "running",
-            "execution_date": self.default_time_2,
             "logical_date": self.default_time_2,
             "external_trigger": True,
             "start_date": self.default_time,
@@ -478,7 +381,6 @@ class TestGetDagRuns(TestDagRunEndpoint):
             "dag_run_id": "TEST_DAG_RUN_ID_2",
             "end_date": None,
             "state": "running",
-            "execution_date": self.default_time_2,
             "logical_date": self.default_time_2,
             "external_trigger": True,
             "start_date": self.default_time,
@@ -495,7 +397,6 @@ class TestGetDagRuns(TestDagRunEndpoint):
             "dag_run_id": "TEST_DAG_RUN_ID_1",
             "end_date": None,
             "state": "running",
-            "execution_date": self.default_time,
             "logical_date": self.default_time,
             "external_trigger": True,
             "start_date": self.default_time,
@@ -511,7 +412,7 @@ class TestGetDagRuns(TestDagRunEndpoint):
         result = session.query(DagRun).all()
         assert len(result) == 2
         response = self.client.get(
-            "api/v1/dags/TEST_DAG_ID/dagRuns?order_by=-execution_date",
+            "api/v1/dags/TEST_DAG_ID/dagRuns?order_by=-logical_date",
             environ_overrides={"REMOTE_USER": "test"},
         )
 
@@ -534,16 +435,6 @@ class TestGetDagRuns(TestDagRunEndpoint):
         dag_run_ids = [dag_run["dag_id"] for dag_run in response.json["dag_runs"]]
         assert dag_run_ids == expected_dag_run_ids
 
-    def test_should_return_accessible_with_tilde_as_dag_id_and_dag_level_permissions(self):
-        self._create_test_dag_run(extra_dag=True)
-        expected_dag_run_ids = ["TEST_DAG_ID", "TEST_DAG_ID"]
-        response = self.client.get(
-            "api/v1/dags/~/dagRuns", environ_overrides={"REMOTE_USER": "test_granular_permissions"}
-        )
-        assert response.status_code == 200
-        dag_run_ids = [dag_run["dag_id"] for dag_run in response.json["dag_runs"]]
-        assert dag_run_ids == expected_dag_run_ids
-
     def test_should_raises_401_unauthenticated(self):
         self._create_test_dag_run()
 
@@ -555,7 +446,7 @@ class TestGetDagRuns(TestDagRunEndpoint):
         "fields",
         [
             ["dag_run_id", "logical_date"],
-            ["dag_run_id", "state", "conf", "execution_date"],
+            ["dag_run_id", "state", "conf", "logical_date"],
         ],
     )
     def test_should_return_specified_fields(self, session, fields):
@@ -580,18 +471,6 @@ class TestGetDagRuns(TestDagRunEndpoint):
             environ_overrides={"REMOTE_USER": "test"},
         )
         assert response.status_code == 400, f"Current code: {response.status_code}"
-
-    @pytest.mark.parametrize(
-        "set_auto_role_public, expected_status_code",
-        (("Public", 403), ("Admin", 200)),
-        indirect=["set_auto_role_public"],
-    )
-    def test_with_auth_role_public_set(self, set_auto_role_public, expected_status_code, session):
-        self._create_test_dag_run()
-        result = session.query(DagRun).all()
-        assert len(result) == 2
-        response = self.client.get("api/v1/dags/TEST_DAG_ID/dagRuns")
-        assert response.status_code == expected_status_code
 
 
 class TestGetDagRunsPagination(TestDagRunEndpoint):
@@ -670,7 +549,7 @@ class TestGetDagRunsPagination(TestDagRunEndpoint):
                 dag_id="TEST_DAG_ID",
                 run_id=f"TEST_DAG_RUN_ID{i}",
                 run_type=DagRunType.MANUAL,
-                execution_date=timezone.parse(self.default_time) + timedelta(minutes=i),
+                logical_date=timezone.parse(self.default_time) + timedelta(minutes=i),
                 start_date=timezone.parse(self.default_time),
                 external_trigger=True,
             )
@@ -747,7 +626,7 @@ class TestGetDagRunsPaginationFilters(TestDagRunEndpoint):
         dagrun_models = self._create_dag_runs()
         session.add_all(dagrun_models)
         for d in dagrun_models:
-            d.updated_at = d.execution_date
+            d.updated_at = d.logical_date
         session.commit()
 
         response = self.client.get(url, environ_overrides={"REMOTE_USER": "test"})
@@ -775,7 +654,7 @@ class TestGetDagRunsPaginationFilters(TestDagRunEndpoint):
                 dag_id="TEST_DAG_ID",
                 run_id=f"TEST_START_EXEC_DAY_1{i}",
                 run_type=DagRunType.MANUAL,
-                execution_date=timezone.parse(dates[i]),
+                logical_date=timezone.parse(dates[i]),
                 start_date=timezone.parse(dates[i]),
                 external_trigger=True,
                 state=DagRunState.SUCCESS,
@@ -819,7 +698,6 @@ class TestGetDagRunBatch(TestDagRunEndpoint):
             "dag_run_id": "TEST_DAG_RUN_ID_1",
             "end_date": None,
             "state": "running",
-            "execution_date": self.default_time,
             "logical_date": self.default_time,
             "external_trigger": True,
             "start_date": self.default_time,
@@ -837,7 +715,6 @@ class TestGetDagRunBatch(TestDagRunEndpoint):
             "dag_run_id": "TEST_DAG_RUN_ID_2",
             "end_date": None,
             "state": "running",
-            "execution_date": self.default_time_2,
             "logical_date": self.default_time_2,
             "external_trigger": True,
             "start_date": self.default_time,
@@ -899,7 +776,6 @@ class TestGetDagRunBatch(TestDagRunEndpoint):
             "dag_run_id": "TEST_DAG_RUN_ID_2",
             "end_date": None,
             "state": "running",
-            "execution_date": self.default_time_2,
             "logical_date": self.default_time_2,
             "external_trigger": True,
             "start_date": self.default_time,
@@ -916,7 +792,6 @@ class TestGetDagRunBatch(TestDagRunEndpoint):
             "dag_run_id": "TEST_DAG_RUN_ID_1",
             "end_date": None,
             "state": "running",
-            "execution_date": self.default_time,
             "logical_date": self.default_time,
             "external_trigger": True,
             "start_date": self.default_time,
@@ -954,57 +829,6 @@ class TestGetDagRunBatch(TestDagRunEndpoint):
         msg = "Ordering with 'dag_ru' is disallowed or the attribute does not exist on the model"
         assert response.json["detail"] == msg
 
-    def test_should_return_accessible_with_tilde_as_dag_id_and_dag_level_permissions(self):
-        self._create_test_dag_run(extra_dag=True)
-        expected_response_json_1 = {
-            "dag_id": "TEST_DAG_ID",
-            "dag_run_id": "TEST_DAG_RUN_ID_1",
-            "end_date": None,
-            "state": "running",
-            "execution_date": self.default_time,
-            "logical_date": self.default_time,
-            "external_trigger": True,
-            "start_date": self.default_time,
-            "conf": {},
-            "data_interval_end": None,
-            "data_interval_start": None,
-            "last_scheduling_decision": None,
-            "run_type": "manual",
-            "note": None,
-        }
-        expected_response_json_1.update({"triggered_by": "test"} if AIRFLOW_V_3_0_PLUS else {})
-        expected_response_json_2 = {
-            "dag_id": "TEST_DAG_ID",
-            "dag_run_id": "TEST_DAG_RUN_ID_2",
-            "end_date": None,
-            "state": "running",
-            "execution_date": self.default_time_2,
-            "logical_date": self.default_time_2,
-            "external_trigger": True,
-            "start_date": self.default_time,
-            "conf": {},
-            "data_interval_end": None,
-            "data_interval_start": None,
-            "last_scheduling_decision": None,
-            "run_type": "manual",
-            "note": None,
-        }
-        expected_response_json_2.update({"triggered_by": "test"} if AIRFLOW_V_3_0_PLUS else {})
-
-        response = self.client.post(
-            "api/v1/dags/~/dagRuns/list",
-            json={"dag_ids": []},
-            environ_overrides={"REMOTE_USER": "test_granular_permissions"},
-        )
-        assert response.status_code == 200
-        assert response.json == {
-            "dag_runs": [
-                expected_response_json_1,
-                expected_response_json_2,
-            ],
-            "total_entries": 2,
-        }
-
     @pytest.mark.parametrize(
         "payload, error",
         [
@@ -1031,18 +855,6 @@ class TestGetDagRunBatch(TestDagRunEndpoint):
         response = self.client.post("api/v1/dags/~/dagRuns/list", json={"dag_ids": ["TEST_DAG_ID"]})
 
         assert_401(response)
-
-    @pytest.mark.parametrize(
-        "set_auto_role_public, expected_status_code",
-        (("Public", 403), ("Admin", 200)),
-        indirect=["set_auto_role_public"],
-    )
-    def test_with_auth_role_public_set(self, set_auto_role_public, expected_status_code):
-        self._create_test_dag_run()
-
-        response = self.client.post("api/v1/dags/~/dagRuns/list", json={"dag_ids": ["TEST_DAG_ID"]})
-
-        assert response.status_code == expected_status_code
 
 
 class TestGetDagRunBatchPagination(TestDagRunEndpoint):
@@ -1112,7 +924,7 @@ class TestGetDagRunBatchPagination(TestDagRunEndpoint):
                 run_id=f"TEST_DAG_RUN_ID{i}",
                 state="running",
                 run_type=DagRunType.MANUAL,
-                execution_date=timezone.parse(self.default_time) + timedelta(minutes=i),
+                logical_date=timezone.parse(self.default_time) + timedelta(minutes=i),
                 start_date=timezone.parse(self.default_time),
                 external_trigger=True,
             )
@@ -1195,7 +1007,7 @@ class TestGetDagRunBatchDateFilters(TestDagRunEndpoint):
                 dag_id="TEST_DAG_ID",
                 run_id=f"TEST_START_EXEC_DAY_1{i}",
                 run_type=DagRunType.MANUAL,
-                execution_date=timezone.parse(date),
+                logical_date=timezone.parse(date),
                 start_date=timezone.parse(date),
                 external_trigger=True,
                 state="success",
@@ -1271,7 +1083,6 @@ class TestGetDagRunBatchDateFilters(TestDagRunEndpoint):
 
 class TestPostDagRun(TestDagRunEndpoint):
     @time_machine.travel(timezone.utcnow(), tick=False)
-    @pytest.mark.parametrize("logical_date_field_name", ["execution_date", "logical_date"])
     @pytest.mark.parametrize(
         "dag_run_id, logical_date, note, data_interval_start, data_interval_end",
         [
@@ -1293,7 +1104,6 @@ class TestPostDagRun(TestDagRunEndpoint):
     def test_should_respond_200(
         self,
         session,
-        logical_date_field_name,
         dag_run_id,
         logical_date,
         note,
@@ -1309,7 +1119,7 @@ class TestPostDagRun(TestDagRunEndpoint):
 
         request_json = {}
         if logical_date is not None:
-            request_json[logical_date_field_name] = logical_date
+            request_json["logical_date"] = logical_date
         if dag_run_id is not None:
             request_json["dag_run_id"] = dag_run_id
         if data_interval_start is not None:
@@ -1346,7 +1156,6 @@ class TestPostDagRun(TestDagRunEndpoint):
             "dag_id": "TEST_DAG_ID",
             "dag_run_id": expected_dag_run_id,
             "end_date": None,
-            "execution_date": expected_logical_date,
             "logical_date": expected_logical_date,
             "external_trigger": True,
             "start_date": None,
@@ -1360,7 +1169,7 @@ class TestPostDagRun(TestDagRunEndpoint):
         expected_response_json.update({"triggered_by": "rest_api"} if AIRFLOW_V_3_0_PLUS else {})
 
         assert response.json == expected_response_json
-        _check_last_log(session, dag_id="TEST_DAG_ID", event="api.post_dag_run", execution_date=None)
+        _check_last_log(session, dag_id="TEST_DAG_ID", event="api.post_dag_run", logical_date=None)
 
     def test_raises_validation_error_for_invalid_request(self):
         self._create_dag("TEST_DAG_ID")
@@ -1387,25 +1196,18 @@ class TestPostDagRun(TestDagRunEndpoint):
         assert response.status_code == 400
         assert "Invalid input for param" in response.json["detail"]
 
-    def test_dagrun_trigger_with_dag_level_permissions(self):
-        self._create_dag("TEST_DAG_ID")
-        response = self.client.post(
-            "api/v1/dags/TEST_DAG_ID/dagRuns",
-            json={"conf": {"validated_number": 1}},
-            environ_overrides={"REMOTE_USER": "test_no_dag_run_create_permission"},
-        )
-        assert response.status_code == 200
-
     @mock.patch("airflow.api_connexion.endpoints.dag_run_endpoint.get_airflow_app")
-    def test_dagrun_creation_exception_is_handled(self, mock_get_app, session):
+    @mock.patch("airflow.api_connexion.endpoints.dag_run_endpoint.DagVersion")
+    def test_dagrun_creation_exception_is_handled(self, mock_get_dag_version, mock_get_app, session):
         self._create_dag("TEST_DAG_ID")
         error_message = "Encountered Error"
         mock_get_app.return_value.dag_bag.get_dag.return_value.create_dagrun.side_effect = ValueError(
             error_message
         )
+        mock_get_dag_version.get_latest_version.return_value = mock.MagicMock()
         response = self.client.post(
             "api/v1/dags/TEST_DAG_ID/dagRuns",
-            json={"execution_date": "2020-11-10T08:25:56Z"},
+            json={"logical_date": "2020-11-10T08:25:56Z"},
             environ_overrides={"REMOTE_USER": "test"},
         )
         assert response.status_code == 400
@@ -1439,21 +1241,19 @@ class TestPostDagRun(TestDagRunEndpoint):
             json={},
             environ_overrides={"REMOTE_USER": "test"},
         )
-        assert {
+        assert response.json == {
             "detail": "DAG with dag_id: 'TEST_DAG_ID' has import errors",
             "status": 400,
             "title": "DAG cannot be triggered",
             "type": EXCEPTIONS_LINK_MAP[400],
-        } == response.json
+        }
 
-    def test_should_response_200_for_matching_execution_date_logical_date(self):
-        execution_date = "2020-11-10T08:25:56.939143+00:00"
+    def test_should_response_200_for_matching_logical_date(self):
         logical_date = "2020-11-10T08:25:56.939143+00:00"
         self._create_dag("TEST_DAG_ID")
         response = self.client.post(
             "api/v1/dags/TEST_DAG_ID/dagRuns",
             json={
-                "execution_date": execution_date,
                 "logical_date": logical_date,
             },
             environ_overrides={"REMOTE_USER": "test"},
@@ -1465,7 +1265,6 @@ class TestPostDagRun(TestDagRunEndpoint):
             "dag_id": "TEST_DAG_ID",
             "dag_run_id": dag_run_id,
             "end_date": None,
-            "execution_date": execution_date,
             "logical_date": logical_date,
             "external_trigger": True,
             "start_date": None,
@@ -1480,19 +1279,6 @@ class TestPostDagRun(TestDagRunEndpoint):
 
         assert response.status_code == 200
         assert response.json == expected_response_json
-
-    def test_should_response_400_for_conflicting_execution_date_logical_date(self):
-        execution_date = "2020-11-10T08:25:56.939143+00:00"
-        logical_date = "2020-11-11T08:25:56.939143+00:00"
-        self._create_dag("TEST_DAG_ID")
-        response = self.client.post(
-            "api/v1/dags/TEST_DAG_ID/dagRuns",
-            json={"execution_date": execution_date, "logical_date": logical_date},
-            environ_overrides={"REMOTE_USER": "test"},
-        )
-        assert response.status_code == 400
-        assert response.json["title"] == "logical_date conflicts with execution_date"
-        assert response.json["detail"] == (f"'{logical_date}' != '{execution_date}'")
 
     @pytest.mark.parametrize(
         "data_interval_start, data_interval_end, expected",
@@ -1526,7 +1312,7 @@ class TestPostDagRun(TestDagRunEndpoint):
         response = self.client.post(
             "api/v1/dags/TEST_DAG_ID/dagRuns",
             json={
-                "execution_date": "2020-11-10T08:25:56.939143+00:00",
+                "logical_date": "2020-11-10T08:25:56.939143+00:00",
                 "data_interval_start": data_interval_start,
                 "data_interval_end": data_interval_end,
             },
@@ -1538,14 +1324,6 @@ class TestPostDagRun(TestDagRunEndpoint):
     @pytest.mark.parametrize(
         "data, expected",
         [
-            (
-                {"execution_date": "2020-11-10T08:25:56.939143"},
-                "'2020-11-10T08:25:56.939143' is not a 'date-time' - 'execution_date'",
-            ),
-            (
-                {"execution_date": "2020-11-10T08:25:56P"},
-                "'2020-11-10T08:25:56P' is not a 'date-time' - 'execution_date'",
-            ),
             (
                 {"logical_date": "2020-11-10T08:25:56.939143"},
                 "'2020-11-10T08:25:56.939143' is not a 'date-time' - 'logical_date'",
@@ -1570,7 +1348,7 @@ class TestPostDagRun(TestDagRunEndpoint):
             (
                 {
                     "dag_run_id": "TEST_DAG_RUN",
-                    "execution_date": "2020-06-11T18:00:00+00:00",
+                    "logical_date": "2020-06-11T18:00:00+00:00",
                     "conf": "some string",
                 },
                 "'some string' is not of type 'object' - 'conf'",
@@ -1588,16 +1366,16 @@ class TestPostDagRun(TestDagRunEndpoint):
     def test_response_404(self):
         response = self.client.post(
             "api/v1/dags/TEST_DAG_ID/dagRuns",
-            json={"dag_run_id": "TEST_DAG_RUN", "execution_date": self.default_time},
+            json={"dag_run_id": "TEST_DAG_RUN", "logical_date": self.default_time},
             environ_overrides={"REMOTE_USER": "test"},
         )
         assert response.status_code == 404
-        assert {
+        assert response.json == {
             "detail": "DAG with dag_id: 'TEST_DAG_ID' not found",
             "status": 404,
             "title": "DAG not found",
             "type": EXCEPTIONS_LINK_MAP[404],
-        } == response.json
+        }
 
     @pytest.mark.parametrize(
         "url, request_json, expected_response",
@@ -1606,7 +1384,7 @@ class TestPostDagRun(TestDagRunEndpoint):
                 "api/v1/dags/TEST_DAG_ID/dagRuns",
                 {
                     "start_date": "2020-06-11T18:00:00+00:00",
-                    "execution_date": "2020-06-12T18:00:00+00:00",
+                    "logical_date": "2020-06-12T18:00:00+00:00",
                 },
                 {
                     "detail": "Property is read-only - 'start_date'",
@@ -1618,7 +1396,7 @@ class TestPostDagRun(TestDagRunEndpoint):
             ),
             pytest.param(
                 "api/v1/dags/TEST_DAG_ID/dagRuns",
-                {"state": "failed", "execution_date": "2020-06-12T18:00:00+00:00"},
+                {"state": "failed", "logical_date": "2020-06-12T18:00:00+00:00"},
                 {
                     "detail": "Property is read-only - 'state'",
                     "status": 400,
@@ -1641,7 +1419,7 @@ class TestPostDagRun(TestDagRunEndpoint):
             "api/v1/dags/TEST_DAG_ID/dagRuns",
             json={
                 "dag_run_id": "TEST_DAG_RUN_ID_1",
-                "execution_date": self.default_time_3,
+                "logical_date": self.default_time_3,
             },
             environ_overrides={"REMOTE_USER": "test"},
         )
@@ -1654,14 +1432,14 @@ class TestPostDagRun(TestDagRunEndpoint):
             "type": EXCEPTIONS_LINK_MAP[409],
         }
 
-    def test_response_409_when_execution_date_is_same(self):
+    def test_response_409_when_logical_date_is_same(self):
         self._create_test_dag_run()
 
         response = self.client.post(
             "api/v1/dags/TEST_DAG_ID/dagRuns",
             json={
                 "dag_run_id": "TEST_DAG_RUN_ID_6",
-                "execution_date": self.default_time,
+                "logical_date": self.default_time,
             },
             environ_overrides={"REMOTE_USER": "test"},
         )
@@ -1680,52 +1458,28 @@ class TestPostDagRun(TestDagRunEndpoint):
             "api/v1/dags/TEST_DAG_ID/dagRuns",
             json={
                 "dag_run_id": "TEST_DAG_RUN_ID_1",
-                "execution_date": self.default_time,
+                "logical_date": self.default_time,
             },
         )
 
         assert_401(response)
 
-    @pytest.mark.parametrize(
-        "username",
-        ["test_dag_view_only", "test_view_dags", "test_granular_permissions", "test_no_permissions"],
-    )
-    def test_should_raises_403_unauthorized(self, username):
+    def test_should_raises_403_unauthorized(self):
         self._create_dag("TEST_DAG_ID")
         response = self.client.post(
             "api/v1/dags/TEST_DAG_ID/dagRuns",
             json={
                 "dag_run_id": "TEST_DAG_RUN_ID_1",
-                "execution_date": self.default_time,
+                "logical_date": self.default_time,
             },
-            environ_overrides={"REMOTE_USER": username},
+            environ_overrides={"REMOTE_USER": "test_no_permissions"},
         )
         assert response.status_code == 403
-
-    @pytest.mark.parametrize(
-        "set_auto_role_public, expected_status_code",
-        (("Public", 403), ("Admin", 200)),
-        indirect=["set_auto_role_public"],
-    )
-    def test_with_auth_role_public_set(self, set_auto_role_public, expected_status_code):
-        execution_date = "2020-11-10T08:25:56.939143+00:00"
-        logical_date = "2020-11-10T08:25:56.939143+00:00"
-        self._create_dag("TEST_DAG_ID")
-
-        response = self.client.post(
-            "api/v1/dags/TEST_DAG_ID/dagRuns",
-            json={
-                "execution_date": execution_date,
-                "logical_date": logical_date,
-            },
-        )
-
-        assert response.status_code == expected_status_code
 
 
 class TestPatchDagRunState(TestDagRunEndpoint):
     @pytest.mark.parametrize("state", ["failed", "success", "queued"])
-    @pytest.mark.parametrize("run_type", [state.value for state in DagRunType])
+    @pytest.mark.parametrize("run_type", [DagRunType.MANUAL, DagRunType.SCHEDULED])
     def test_should_respond_200(self, state, run_type, dag_maker, session):
         dag_id = "TEST_DAG_ID"
         dag_run_id = "TEST_DAG_RUN_ID"
@@ -1757,9 +1511,8 @@ class TestPatchDagRunState(TestDagRunEndpoint):
             "dag_id": dag_id,
             "dag_run_id": dag_run_id,
             "end_date": dr.end_date.isoformat() if state != State.QUEUED else None,
-            "execution_date": dr.execution_date.isoformat(),
+            "logical_date": dr.logical_date.isoformat(),
             "external_trigger": False,
-            "logical_date": dr.execution_date.isoformat(),
             "start_date": dr.start_date.isoformat() if state != State.QUEUED else None,
             "state": state,
             "data_interval_start": dr.data_interval_start.isoformat(),
@@ -1772,6 +1525,60 @@ class TestPatchDagRunState(TestDagRunEndpoint):
 
         assert response.status_code == 200
         assert response.json == expected_response_json
+
+    @pytest.mark.parametrize("state", ["failed", "success", "queued"])
+    @pytest.mark.parametrize("run_type", [state.value for state in DagRunType])
+    def test_action_logging(self, state, run_type, dag_maker, session):
+        dag_id = "TEST_DAG_ID"
+        dag_run_id = "TEST_DAG_RUN_ID"
+        with dag_maker(dag_id) as dag:
+            task = EmptyOperator(task_id="task_id", dag=dag)
+        self.app.dag_bag.bag_dag(dag)
+        dr = dag_maker.create_dagrun(run_id=dag_run_id, run_type=run_type)
+        ti = dr.get_task_instance(task_id="task_id")
+        ti.task = task
+        ti.state = State.RUNNING
+        session.merge(ti)
+        session.commit()
+
+        request_json = {"state": state}
+
+        self.client.patch(
+            f"api/v1/dags/{dag_id}/dagRuns/{dag_run_id}",
+            json=request_json,
+            environ_overrides={"REMOTE_USER": "test"},
+        )
+
+        log = (
+            session.query(Log)
+            .filter(
+                Log.dag_id == dag_id,
+                Log.run_id == dag_run_id,
+                Log.event == "api.update_dag_run_state",
+            )
+            .order_by(Log.id.desc())
+            .first()
+        )
+        assert log.extra == json.dumps(request_json)
+
+        self.client.patch(
+            f"api/v1/dags/{dag_id}/dagRuns/{dag_run_id}",
+            json=request_json,
+            environ_overrides={"REMOTE_USER": "test"},
+            headers={"content-type": "application/json; charset=utf-8"},
+        )
+
+        log = (
+            session.query(Log)
+            .filter(
+                Log.dag_id == dag_id,
+                Log.run_id == dag_run_id,
+                Log.event == "api.update_dag_run_state",
+            )
+            .order_by(Log.id.desc())
+            .first()
+        )
+        assert log.extra == json.dumps(request_json)
 
     def test_schema_validation_error_raises(self, dag_maker, session):
         dag_id = "TEST_DAG_ID"
@@ -1848,31 +1655,6 @@ class TestPatchDagRunState(TestDagRunEndpoint):
         )
         assert response.status_code == 404
 
-    @pytest.mark.parametrize(
-        "set_auto_role_public, expected_status_code",
-        (("Public", 403), ("Admin", 200)),
-        indirect=["set_auto_role_public"],
-    )
-    def test_with_auth_role_public_set(self, set_auto_role_public, expected_status_code, dag_maker, session):
-        dag_id = "TEST_DAG_ID"
-        dag_run_id = "TEST_DAG_RUN_ID"
-        with dag_maker(dag_id) as dag:
-            task = EmptyOperator(task_id="task_id", dag=dag)
-        self.app.dag_bag.bag_dag(dag)
-        dr = dag_maker.create_dagrun(run_id=dag_run_id, run_type=DagRunType.SCHEDULED)
-        ti = dr.get_task_instance(task_id="task_id")
-        ti.task = task
-        ti.state = State.RUNNING
-        session.merge(ti)
-        session.commit()
-
-        response = self.client.patch(
-            f"api/v1/dags/{dag_id}/dagRuns/{dag_run_id}",
-            json={"state": "failed"},
-        )
-
-        assert response.status_code == expected_status_code
-
 
 class TestClearDagRun(TestDagRunEndpoint):
     def test_should_respond_200(self, dag_maker, session):
@@ -1902,7 +1684,6 @@ class TestClearDagRun(TestDagRunEndpoint):
             "dag_id": dag_id,
             "dag_run_id": dag_run_id,
             "end_date": None,
-            "execution_date": dr.execution_date.isoformat(),
             "external_trigger": False,
             "logical_date": dr.logical_date.isoformat(),
             "start_date": None,
@@ -1969,7 +1750,7 @@ class TestClearDagRun(TestDagRunEndpoint):
                 {
                     "dag_id": dag_id,
                     "dag_run_id": dag_run_id,
-                    "execution_date": dr.execution_date.isoformat(),
+                    "logical_date": dr.logical_date.isoformat(),
                     "task_id": "task_id",
                 }
             ]
@@ -2011,45 +1792,20 @@ class TestClearDagRun(TestDagRunEndpoint):
         )
         assert response.status_code == 404
 
-    @pytest.mark.parametrize(
-        "set_auto_role_public, expected_status_code",
-        (("Public", 403), ("Admin", 200)),
-        indirect=["set_auto_role_public"],
-    )
-    def test_with_auth_role_public_set(self, set_auto_role_public, expected_status_code, dag_maker, session):
-        dag_id = "TEST_DAG_ID"
-        dag_run_id = "TEST_DAG_RUN_ID"
-        with dag_maker(dag_id) as dag:
-            task = EmptyOperator(task_id="task_id", dag=dag)
-        self.app.dag_bag.bag_dag(dag)
-        dr = dag_maker.create_dagrun(run_id=dag_run_id, run_type=DagRunType.SCHEDULED)
-        ti = dr.get_task_instance(task_id="task_id")
-        ti.task = task
-        ti.state = State.RUNNING
-        session.merge(ti)
-        session.commit()
-
-        response = self.client.patch(
-            f"api/v1/dags/{dag_id}/dagRuns/{dag_run_id}",
-            json={"state": "failed"},
-        )
-
-        assert response.status_code == expected_status_code
-
 
 @pytest.mark.need_serialized_dag
-class TestGetDagRunDatasetTriggerEvents(TestDagRunEndpoint):
+class TestGetDagRunAssetTriggerEvents(TestDagRunEndpoint):
     def test_should_respond_200(self, dag_maker, session):
-        dataset1 = Dataset(uri="ds1")
+        asset1 = Asset(uri="test://asset1", name="asset1")
 
         with dag_maker(dag_id="source_dag", start_date=timezone.utcnow(), session=session):
-            EmptyOperator(task_id="task", outlets=[dataset1])
+            EmptyOperator(task_id="task", outlets=[asset1])
         dr = dag_maker.create_dagrun()
         ti = dr.task_instances[0]
 
-        ds1_id = session.query(DatasetModel.id).filter_by(uri=dataset1.uri).scalar()
-        event = DatasetEvent(
-            dataset_id=ds1_id,
+        asset1_id = session.query(AssetModel.id).filter_by(uri=asset1.uri).scalar()
+        event = AssetEvent(
+            asset_id=asset1_id,
             source_task_id=ti.task_id,
             source_dag_id=ti.dag_id,
             source_run_id=ti.run_id,
@@ -2059,23 +1815,23 @@ class TestGetDagRunDatasetTriggerEvents(TestDagRunEndpoint):
 
         with dag_maker(dag_id="TEST_DAG_ID", start_date=timezone.utcnow(), session=session):
             pass
-        dr = dag_maker.create_dagrun(run_id="TEST_DAG_RUN_ID", run_type=DagRunType.DATASET_TRIGGERED)
-        dr.consumed_dataset_events.append(event)
+        dr = dag_maker.create_dagrun(run_id="TEST_DAG_RUN_ID", run_type=DagRunType.ASSET_TRIGGERED)
+        dr.consumed_asset_events.append(event)
 
         session.commit()
         assert event.timestamp
 
         response = self.client.get(
-            "api/v1/dags/TEST_DAG_ID/dagRuns/TEST_DAG_RUN_ID/upstreamDatasetEvents",
+            "api/v1/dags/TEST_DAG_ID/dagRuns/TEST_DAG_RUN_ID/upstreamAssetEvents",
             environ_overrides={"REMOTE_USER": "test"},
         )
         assert response.status_code == 200
         expected_response = {
-            "dataset_events": [
+            "asset_events": [
                 {
                     "timestamp": event.timestamp.isoformat(),
-                    "dataset_id": ds1_id,
-                    "dataset_uri": dataset1.uri,
+                    "asset_id": asset1_id,
+                    "asset_uri": asset1.uri,
                     "extra": {},
                     "id": event.id,
                     "source_dag_id": ti.dag_id,
@@ -2102,7 +1858,7 @@ class TestGetDagRunDatasetTriggerEvents(TestDagRunEndpoint):
 
     def test_should_respond_404(self):
         response = self.client.get(
-            "api/v1/dags/invalid-id/dagRuns/invalid-id/upstreamDatasetEvents",
+            "api/v1/dags/invalid-id/dagRuns/invalid-id/upstreamAssetEvents",
             environ_overrides={"REMOTE_USER": "test"},
         )
         assert response.status_code == 404
@@ -2119,52 +1875,16 @@ class TestGetDagRunDatasetTriggerEvents(TestDagRunEndpoint):
             dag_id="TEST_DAG_ID",
             run_id="TEST_DAG_RUN_ID",
             run_type=DagRunType.MANUAL,
-            execution_date=timezone.parse(self.default_time),
+            logical_date=timezone.parse(self.default_time),
             start_date=timezone.parse(self.default_time),
             external_trigger=True,
         )
         session.add(dagrun_model)
         session.commit()
 
-        response = self.client.get("api/v1/dags/TEST_DAG_ID/dagRuns/TEST_DAG_RUN_ID/upstreamDatasetEvents")
+        response = self.client.get("api/v1/dags/TEST_DAG_ID/dagRuns/TEST_DAG_RUN_ID/upstreamAssetEvents")
 
         assert_401(response)
-
-    @pytest.mark.parametrize(
-        "set_auto_role_public, expected_status_code",
-        (("Public", 403), ("Admin", 200)),
-        indirect=["set_auto_role_public"],
-    )
-    def test_with_auth_role_public_set(self, set_auto_role_public, expected_status_code, dag_maker, session):
-        dataset1 = Dataset(uri="ds1")
-
-        with dag_maker(dag_id="source_dag", start_date=timezone.utcnow(), session=session):
-            EmptyOperator(task_id="task", outlets=[dataset1])
-        dr = dag_maker.create_dagrun()
-        ti = dr.task_instances[0]
-
-        ds1_id = session.query(DatasetModel.id).filter_by(uri=dataset1.uri).scalar()
-        event = DatasetEvent(
-            dataset_id=ds1_id,
-            source_task_id=ti.task_id,
-            source_dag_id=ti.dag_id,
-            source_run_id=ti.run_id,
-            source_map_index=ti.map_index,
-        )
-        session.add(event)
-
-        with dag_maker(dag_id="TEST_DAG_ID", start_date=timezone.utcnow(), session=session):
-            pass
-        dr = dag_maker.create_dagrun(run_id="TEST_DAG_RUN_ID", run_type=DagRunType.DATASET_TRIGGERED)
-        dr.consumed_dataset_events.append(event)
-
-        session.commit()
-        assert event.timestamp
-
-        response = self.client.get(
-            "api/v1/dags/TEST_DAG_ID/dagRuns/TEST_DAG_RUN_ID/upstreamDatasetEvents",
-        )
-        assert response.status_code == expected_status_code
 
 
 class TestSetDagRunNote(TestDagRunEndpoint):
@@ -2186,7 +1906,6 @@ class TestSetDagRunNote(TestDagRunEndpoint):
             "dag_id": dr.dag_id,
             "dag_run_id": dr.run_id,
             "end_date": dr.end_date.isoformat(),
-            "execution_date": self.default_time,
             "external_trigger": True,
             "logical_date": self.default_time,
             "start_date": self.default_time,
@@ -2216,9 +1935,8 @@ class TestSetDagRunNote(TestDagRunEndpoint):
             "dag_id": dr.dag_id,
             "dag_run_id": dr.run_id,
             "end_date": dr.end_date.isoformat(),
-            "execution_date": self.default_time,
-            "external_trigger": True,
             "logical_date": self.default_time,
+            "external_trigger": True,
             "start_date": self.default_time,
             "state": "success",
             "data_interval_start": None,
@@ -2236,7 +1954,7 @@ class TestSetDagRunNote(TestDagRunEndpoint):
             session,
             dag_id=dr.dag_id,
             event="api.set_dag_run_note",
-            execution_date=None,
+            logical_date=None,
             expected_extra=payload,
         )
 
@@ -2282,23 +2000,3 @@ class TestSetDagRunNote(TestDagRunEndpoint):
             environ_overrides={"REMOTE_USER": "test"},
         )
         assert response.status_code == 404
-
-    @pytest.mark.parametrize(
-        "set_auto_role_public, expected_status_code",
-        (("Public", 403), ("Admin", 200)),
-        indirect=["set_auto_role_public"],
-    )
-    def test_with_auth_role_public_set(self, set_auto_role_public, expected_status_code, session):
-        dag_runs: list[DagRun] = self._create_test_dag_run(DagRunState.SUCCESS)
-        session.add_all(dag_runs)
-        session.commit()
-        created_dr: DagRun = dag_runs[0]
-        new_note_value = "My super cool DagRun notes"
-        response = self.client.patch(
-            f"api/v1/dags/{created_dr.dag_id}/dagRuns/{created_dr.run_id}/setNote",
-            json={"note": new_note_value},
-        )
-
-        session.query(DagRun).filter(DagRun.run_id == created_dr.run_id).first()
-
-        assert response.status_code == expected_status_code

@@ -30,7 +30,7 @@ pytestmark = pytest.mark.db_test
 
 
 if TYPE_CHECKING:
-    from airflow.utils.context import Context
+    from airflow.sdk.definitions.context import Context
 
 
 class MockNotifier(BaseNotifier):
@@ -94,7 +94,6 @@ class TestBaseNotifier:
                 "dag": None,
                 "task_list": ["some_task"],
                 "blocking_task_list": None,
-                "slas": None,
                 "blocking_tis": None,
                 "message": "task: {{ task_list[0] }}",
             }

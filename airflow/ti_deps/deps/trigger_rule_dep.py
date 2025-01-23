@@ -20,7 +20,8 @@ from __future__ import annotations
 import collections.abc
 import functools
 from collections import Counter
-from typing import TYPE_CHECKING, Iterator, KeysView, NamedTuple
+from collections.abc import Iterator, KeysView
+from typing import TYPE_CHECKING, NamedTuple
 
 from sqlalchemy import and_, func, or_, select
 
@@ -138,10 +139,12 @@ class TriggerRuleDep(BaseTIDep):
             This extra closure allows us to query the database only when needed,
             and at most once.
             """
+            from airflow.models.baseoperator import BaseOperator
+
             if TYPE_CHECKING:
                 assert ti.task
 
-            return ti.task.get_mapped_ti_count(ti.run_id, session=session)
+            return BaseOperator.get_mapped_ti_count(ti.task, ti.run_id, session=session)
 
         @functools.lru_cache
         def _get_relevant_upstream_map_indexes(upstream_id: str) -> int | range | None:

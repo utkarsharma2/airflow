@@ -27,16 +27,13 @@ import os
 import sys
 import time
 import warnings
+from collections.abc import Generator, Iterable, Iterator, Sequence
 from tempfile import gettempdir
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
-    Generator,
-    Iterable,
-    Iterator,
     Protocol,
-    Sequence,
     TypeVar,
     overload,
 )
@@ -44,7 +41,6 @@ from typing import (
 import attrs
 from sqlalchemy import (
     Table,
-    delete,
     exc,
     func,
     inspect,
@@ -70,6 +66,7 @@ if TYPE_CHECKING:
     from alembic.runtime.environment import EnvironmentContext
     from alembic.script import ScriptDirectory
     from sqlalchemy.engine import Row
+    from sqlalchemy.ext.asyncio import AsyncSession
     from sqlalchemy.orm import Session
     from sqlalchemy.sql.elements import ClauseElement, TextClause
     from sqlalchemy.sql.selectable import Select
@@ -89,14 +86,15 @@ T = TypeVar("T")
 
 log = logging.getLogger(__name__)
 
-_REVISION_HEADS_MAP = {
+_REVISION_HEADS_MAP: dict[str, str] = {
     "2.7.0": "405de8318b3a",
     "2.8.0": "10b52ebd31f7",
     "2.8.1": "88344c1d9134",
     "2.9.0": "1949afb29106",
     "2.9.2": "686269002441",
     "2.10.0": "22ed7efa9da2",
-    "3.0.0": "1cdc775ca98f",
+    "2.10.3": "5f2621c13b39",
+    "3.0.0": "e39a26ac59f6",
 }
 
 
@@ -476,6 +474,16 @@ def create_default_connections(session: Session = NEW_SESSION):
     )
     merge_conn(
         Connection(
+            conn_id="opensearch_default",
+            conn_type="opensearch",
+            host="localhost",
+            schema="http",
+            port=9200,
+        ),
+        session,
+    )
+    merge_conn(
+        Connection(
             conn_id="opsgenie_default",
             conn_type="http",
             host="",
@@ -738,6 +746,7 @@ def _get_flask_db(sql_database_uri):
 
 
 def _create_db_from_orm(session):
+    log.info("Creating Airflow database tables from the ORM")
     from alembic import command
 
     from airflow.models.base import Base
@@ -753,6 +762,7 @@ def _create_db_from_orm(session):
         # stamp the migration head
         config = _get_alembic_config()
         command.stamp(config, "head")
+        log.info("Airflow database tables created")
 
 
 @provide_session
@@ -819,6 +829,7 @@ def check_migrations(timeout):
     :return: None
     """
     timeout = timeout or 1  # run the loop at least 1
+    external_db_manager = RunDBManager()
     with _configured_alembic_environment() as env:
         context = env.get_context()
         source_heads = None
@@ -826,7 +837,7 @@ def check_migrations(timeout):
         for ticker in range(timeout):
             source_heads = set(env.script.get_heads())
             db_heads = set(context.get_current_heads())
-            if source_heads == db_heads:
+            if source_heads == db_heads and external_db_manager.check_migration(settings.Session()):
                 return
             time.sleep(1)
             log.info("Waiting for migrations... %s second(s)", ticker)
@@ -843,10 +854,13 @@ def _configured_alembic_environment() -> Generator[EnvironmentContext, None, Non
     config = _get_alembic_config()
     script = _get_script_object(config)
 
-    with EnvironmentContext(
-        config,
-        script,
-    ) as env, settings.engine.connect() as connection:
+    with (
+        EnvironmentContext(
+            config,
+            script,
+        ) as env,
+        settings.engine.connect() as connection,
+    ):
         alembic_logger = logging.getLogger("alembic")
         level = alembic_logger.level
         alembic_logger.setLevel(logging.WARNING)
@@ -871,8 +885,8 @@ def check_and_run_migrations():
         verb = "initialize"
     elif source_heads != db_heads:
         db_command = upgradedb
-        command_name = "upgrade"
-        verb = "upgrade"
+        command_name = "migrate"
+        verb = "migrate"
 
     if sys.stdout.isatty() and verb:
         print()
@@ -905,16 +919,6 @@ def check_and_run_migrations():
             file=sys.stderr,
         )
         sys.exit(1)
-
-
-def _reserialize_dags(*, session: Session) -> None:
-    from airflow.models.dagbag import DagBag
-    from airflow.models.serialized_dag import SerializedDagModel
-
-    session.execute(delete(SerializedDagModel).execution_options(synchronize_session=False))
-    dagbag = DagBag(collect_dags=False)
-    dagbag.collect_dags(only_if_updated=False)
-    dagbag.sync_to_db(session=session)
 
 
 @provide_session
@@ -959,7 +963,7 @@ def synchronize_log_template(*, session: Session = NEW_SESSION) -> None:
             session.add(
                 LogTemplate(
                     filename="{{ ti.dag_id }}/{{ ti.task_id }}/{{ ts }}/{{ try_number }}.log",
-                    elasticsearch_id="{dag_id}-{task_id}-{execution_date}-{try_number}",
+                    elasticsearch_id="{dag_id}-{task_id}-{logical_date}-{try_number}",
                 )
             )
 
@@ -1027,6 +1031,11 @@ def _check_migration_errors(session: Session = NEW_SESSION) -> Iterable[str]:
 
 
 def _offline_migration(migration_func: Callable, config, revision):
+    """
+    Run offline migration.
+
+    :meta private:
+    """
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         logging.disable(logging.CRITICAL)
@@ -1069,7 +1078,7 @@ def _revisions_above_min_for_offline(config, revisions) -> None:
     dbname = settings.engine.dialect.name
     if dbname == "sqlite":
         raise SystemExit("Offline migration not supported for SQLite.")
-    min_version, min_revision = ("3.0.0", "22ed7efa9da2")
+    min_version, min_revision = ("2.7.0", "937cbd173ca1")
 
     # Check if there is history between the revisions and the start revision
     # This ensures that the revisions are above `min_revision`
@@ -1150,9 +1159,7 @@ def upgradedb(
     with create_global_lock(session=session, lock=DBLocks.MIGRATIONS):
         import sqlalchemy.pool
 
-        previous_revision = _get_current_revision(session=session)
-
-        log.info("Creating tables")
+        log.info("Migrating the Airflow database")
         val = os.environ.get("AIRFLOW__DATABASE__SQL_ALCHEMY_MAX_SIZE")
         try:
             # Reconfigure the ORM to use _EXACTLY_ one connection, otherwise some db engines hang forever
@@ -1160,6 +1167,13 @@ def upgradedb(
             os.environ["AIRFLOW__DATABASE__SQL_ALCHEMY_MAX_SIZE"] = "1"
             settings.reconfigure_orm(pool_class=sqlalchemy.pool.SingletonThreadPool)
             command.upgrade(config, revision=to_revision or "heads")
+            current_revision = _get_current_revision(session=session)
+            with _configured_alembic_environment() as env:
+                source_heads = env.script.get_heads()
+            if current_revision == source_heads[0]:
+                # Only run external DB upgrade migration if user upgraded to heads
+                external_db_manager = RunDBManager()
+                external_db_manager.upgradedb(session)
 
         finally:
             if val is None:
@@ -1168,10 +1182,6 @@ def upgradedb(
                 os.environ["AIRFLOW__DATABASE__SQL_ALCHEMY_MAX_SIZE"] = val
             settings.reconfigure_orm()
 
-        current_revision = _get_current_revision(session=session)
-
-        if reserialize_dags and current_revision != previous_revision:
-            _reserialize_dags(session=session)
         add_default_pool_if_not_exists(session=session)
         synchronize_log_template(session=session)
 
@@ -1181,7 +1191,7 @@ def resetdb(session: Session = NEW_SESSION, skip_init: bool = False):
     """Clear out the database."""
     if not settings.engine:
         raise RuntimeError("The settings.engine must be set. This is a critical assertion")
-    log.info("Dropping tables that exist")
+    log.info("Dropping Airflow tables that exist")
 
     import_all_models()
 
@@ -1190,24 +1200,12 @@ def resetdb(session: Session = NEW_SESSION, skip_init: bool = False):
     with create_global_lock(session=session, lock=DBLocks.MIGRATIONS), connection.begin():
         drop_airflow_models(connection)
         drop_airflow_moved_tables(connection)
+        log.info("Dropped all Airflow tables")
         external_db_manager = RunDBManager()
-        external_db_manager.drop_tables(connection)
+        external_db_manager.drop_tables(session, connection)
 
     if not skip_init:
         initdb(session=session)
-
-
-@provide_session
-def bootstrap_dagbag(session: Session = NEW_SESSION):
-    from airflow.models.dag import DAG
-    from airflow.models.dagbag import DagBag
-
-    dagbag = DagBag()
-    # Save DAGs in the ORM
-    dagbag.sync_to_db(session=session)
-
-    # Deactivate the unknown ones
-    DAG.deactivate_unknown_dags(dagbag.dags.keys(), session=session)
 
 
 @provide_session
@@ -1246,7 +1244,7 @@ def downgrade(*, to_revision, from_revision=None, show_sql_only=False, session: 
             revision_range = f"{from_revision}:{to_revision}"
             _offline_migration(command.downgrade, config=config, revision=revision_range)
         else:
-            log.info("Applying downgrade migrations.")
+            log.info("Applying downgrade migrations to Airflow database.")
             command.downgrade(config, revision=to_revision, sql=show_sql_only)
 
 
@@ -1421,6 +1419,21 @@ def get_query_count(query_stmt: Select, *, session: Session) -> int:
     return session.scalar(count_stmt)
 
 
+async def get_query_count_async(statement: Select, *, session: AsyncSession) -> int:
+    """
+    Get count of a query.
+
+    A SELECT COUNT() FROM is issued against the subquery built from the
+    given statement. The ORDER BY clause is stripped from the statement
+    since it's unnecessary for COUNT, and can impact query planning and
+    degrade performance.
+
+    :meta private:
+    """
+    count_stmt = select(func.count()).select_from(statement.order_by(None).subquery())
+    return await session.scalar(count_stmt)
+
+
 def check_query_exists(query_stmt: Select, *, session: Session) -> bool:
     """
     Check whether there is at least one row matching a query.
@@ -1432,7 +1445,8 @@ def check_query_exists(query_stmt: Select, *, session: Session) -> bool:
     :meta private:
     """
     count_stmt = select(literal(True)).select_from(query_stmt.order_by(None).subquery())
-    return session.scalar(count_stmt)
+    # we must cast to bool because scalar() can return None
+    return bool(session.scalar(count_stmt))
 
 
 def exists_query(*where: ClauseElement, session: Session) -> bool:

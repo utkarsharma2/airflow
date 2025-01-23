@@ -16,188 +16,133 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-
+import { HStack, Text } from "@chakra-ui/react";
 import {
-  ColumnDef,
-  Table as TanStackTable,
-  flexRender,
   getCoreRowModel,
   getExpandedRowModel,
   getPaginationRowModel,
-  OnChangeFn,
-  PaginationState,
-  Row,
   useReactTable,
+  type OnChangeFn,
+  type TableState as ReactTableState,
+  type Row,
+  type Table as TanStackTable,
+  type Updater,
 } from "@tanstack/react-table";
-import {
-  Box,
-  Button,
-  Table as ChakraTable,
-  TableContainer,
-  Tbody,
-  Td,
-  Th,
-  Thead,
-  Tr,
-  useColorModeValue,
-} from "@chakra-ui/react";
-import React, { Fragment } from "react";
+import React, { type ReactNode, useCallback, useRef } from "react";
+
+import { ProgressBar, Pagination, Toaster } from "../ui";
+import { CardList } from "./CardList";
+import { TableList } from "./TableList";
+import { createSkeletonMock } from "./skeleton";
+import type { CardDef, MetaColumn, TableState } from "./types";
 
 type DataTableProps<TData> = {
-  data: TData[];
-  total?: number;
-  columns: ColumnDef<TData>[];
-  renderSubComponent?: (props: {
-    row: Row<TData>;
-  }) => React.ReactElement | null;
-  getRowCanExpand?: (row: Row<TData>) => boolean;
-  pagination: PaginationState;
-  setPagination: OnChangeFn<PaginationState>;
+  readonly cardDef?: CardDef<TData>;
+  readonly columns: Array<MetaColumn<TData>>;
+  readonly data: Array<TData>;
+  readonly displayMode?: "card" | "table";
+  readonly errorMessage?: ReactNode | string;
+  readonly getRowCanExpand?: (row: Row<TData>) => boolean;
+  readonly initialState?: TableState;
+  readonly isFetching?: boolean;
+  readonly isLoading?: boolean;
+  readonly modelName?: string;
+  readonly noRowsMessage?: ReactNode;
+  readonly onStateChange?: (state: TableState) => void;
+  readonly renderSubComponent?: (props: { row: Row<TData> }) => React.ReactElement;
+  readonly skeletonCount?: number;
+  readonly total?: number;
 };
 
-type PaginatorProps<TData> = {
-  table: TanStackTable<TData>;
-};
+const defaultGetRowCanExpand = () => false;
 
-const TablePaginator = <TData,>({ table }: PaginatorProps<TData>) => {
-  const pageInterval = 3;
-  const currentPageNumber = table.getState().pagination.pageIndex + 1;
-  const startPageNumber = Math.max(1, currentPageNumber - pageInterval);
-  const endPageNumber = Math.min(
-    table.getPageCount(),
-    startPageNumber + pageInterval * 2
-  );
-  const pageNumbers = [];
-
-  for (let index = startPageNumber; index <= endPageNumber; index++) {
-    pageNumbers.push(
-      <Button
-        borderRadius={0}
-        key={index}
-        isDisabled={index === currentPageNumber}
-        onClick={() => table.setPageIndex(index - 1)}
-      >
-        {index}
-      </Button>
-    );
-  }
-
-  return (
-    <Box mt={2} mb={2}>
-      <Button
-        borderRadius={0}
-        onClick={() => table.firstPage()}
-        isDisabled={!table.getCanPreviousPage()}
-      >
-        {"<<"}
-      </Button>
-
-      <Button
-        borderRadius={0}
-        onClick={() => table.previousPage()}
-        isDisabled={!table.getCanPreviousPage()}
-      >
-        {"<"}
-      </Button>
-      {pageNumbers}
-      <Button
-        borderRadius={0}
-        onClick={() => table.nextPage()}
-        isDisabled={!table.getCanNextPage()}
-      >
-        {">"}
-      </Button>
-      <Button
-        borderRadius={0}
-        onClick={() => table.lastPage()}
-        isDisabled={!table.getCanNextPage()}
-      >
-        {">>"}
-      </Button>
-    </Box>
-  );
-};
-
-export function DataTable<TData>({
-  data,
-  total = 0,
+export const DataTable = <TData,>({
+  cardDef,
   columns,
-  renderSubComponent = () => null,
-  getRowCanExpand = () => false,
-  pagination,
-  setPagination,
-}: DataTableProps<TData>) {
+  data,
+  displayMode = "table",
+  errorMessage,
+  getRowCanExpand = defaultGetRowCanExpand,
+  initialState,
+  isFetching,
+  isLoading,
+  modelName,
+  noRowsMessage,
+  onStateChange,
+  skeletonCount = 10,
+  total = 0,
+}: DataTableProps<TData>) => {
+  const ref = useRef<{ tableRef: TanStackTable<TData> | undefined }>({
+    tableRef: undefined,
+  });
+  const handleStateChange = useCallback<OnChangeFn<ReactTableState>>(
+    (updater: Updater<ReactTableState>) => {
+      if (ref.current.tableRef && onStateChange) {
+        const current = ref.current.tableRef.getState();
+        const next = typeof updater === "function" ? updater(current) : updater;
+
+        // Only use the controlled state
+        const nextState = {
+          pagination: next.pagination,
+          sorting: next.sorting,
+        };
+
+        onStateChange(nextState);
+      }
+    },
+    [onStateChange],
+  );
+
+  const rest = Boolean(isLoading) ? createSkeletonMock(displayMode, skeletonCount, columns) : {};
+
   const table = useReactTable({
-    data,
     columns,
-    getRowCanExpand,
+    data,
     getCoreRowModel: getCoreRowModel(),
     getExpandedRowModel: getExpandedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
-    onPaginationChange: setPagination,
-    rowCount: total,
+    getRowCanExpand,
     manualPagination: true,
-    state: {
-      pagination,
-    },
+    manualSorting: true,
+    onStateChange: handleStateChange,
+    rowCount: total,
+    state: initialState,
+    ...rest,
   });
 
-  const theadBg = useColorModeValue("white", "gray.800");
+  ref.current.tableRef = table;
+
+  const { rows } = table.getRowModel();
+
+  const display = displayMode === "card" && Boolean(cardDef) ? "card" : "table";
+  const hasRows = rows.length > 0;
 
   return (
-    <TableContainer overflowY="auto" maxH="calc(100vh - 10rem)">
-      <ChakraTable colorScheme="blue">
-        <Thead position="sticky" top={0} bg={theadBg}>
-          {table.getHeaderGroups().map((headerGroup) => (
-            <Tr key={headerGroup.id}>
-              {headerGroup.headers.map((header) => {
-                return (
-                  <Th key={header.id} colSpan={header.colSpan}>
-                    {header.isPlaceholder ? null : (
-                      <div>
-                        {flexRender(
-                          header.column.columnDef.header,
-                          header.getContext()
-                        )}
-                      </div>
-                    )}
-                  </Th>
-                );
-              })}
-            </Tr>
-          ))}
-        </Thead>
-        <Tbody>
-          {table.getRowModel().rows.map((row) => {
-            return (
-              <Fragment key={row.id}>
-                <Tr>
-                  {/* first row is a normal row */}
-                  {row.getVisibleCells().map((cell) => {
-                    return (
-                      <Td key={cell.id}>
-                        {flexRender(
-                          cell.column.columnDef.cell,
-                          cell.getContext()
-                        )}
-                      </Td>
-                    );
-                  })}
-                </Tr>
-                {row.getIsExpanded() && (
-                  <Tr>
-                    {/* 2nd row is a custom 1 cell row */}
-                    <Td colSpan={row.getVisibleCells().length}>
-                      {renderSubComponent({ row })}
-                    </Td>
-                  </Tr>
-                )}
-              </Fragment>
-            );
-          })}
-        </Tbody>
-      </ChakraTable>
-      <TablePaginator table={table} />
-    </TableContainer>
+    <>
+      <ProgressBar size="xs" visibility={Boolean(isFetching) && !Boolean(isLoading) ? "visible" : "hidden"} />
+      <Toaster />
+      {errorMessage}
+      {hasRows && display === "table" ? <TableList table={table} /> : undefined}
+      {hasRows && display === "card" && cardDef !== undefined ? (
+        <CardList cardDef={cardDef} isLoading={isLoading} table={table} />
+      ) : undefined}
+      {!hasRows && !Boolean(isLoading) && <Text pt={1}>{noRowsMessage ?? `No ${modelName}s found.`}</Text>}
+      {hasRows ? (
+        <Pagination.Root
+          count={table.getRowCount()}
+          my={2}
+          onPageChange={(page) => table.setPageIndex(page.page - 1)}
+          page={table.getState().pagination.pageIndex + 1}
+          pageSize={table.getState().pagination.pageSize}
+          siblingCount={1}
+        >
+          <HStack>
+            <Pagination.PrevTrigger data-testid="prev" />
+            <Pagination.Items />
+            <Pagination.NextTrigger data-testid="next" />
+          </HStack>
+        </Pagination.Root>
+      ) : undefined}
+    </>
   );
-}
+};
